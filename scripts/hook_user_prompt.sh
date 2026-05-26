@@ -47,6 +47,25 @@ except: pass" 2>/dev/null)"
   fi
 done
 
+# Auto-spawn server if board found but no live server on :7891.
+# Covers the "skill installed but launchd not configured yet" case + crash recovery.
+# Lock file with 10s window prevents double-spawn on rapid prompts.
+if [ -z "${server_hint}" ]; then
+  project_dir="$(dirname "$(dirname "${board_path}")")"
+  serve_py="$(dirname "$0")/serve.py"
+  lock="${project_dir}/board/.spawn.lock"
+  now_ts="$(date +%s)"
+  last_ts="$(stat -f %m "${lock}" 2>/dev/null || stat -c %Y "${lock}" 2>/dev/null || echo 0)"
+  age=$((now_ts - last_ts))
+  if [ -f "${serve_py}" ] && [ "${age}" -gt 10 ]; then
+    : > "${lock}"
+    nohup python3 "${serve_py}" --project "${project_dir}" --port 7891 \
+      >/tmp/board-spawn.log 2>&1 </dev/null &
+    disown 2>/dev/null || true
+    server_hint=" @ :7891 (spawning…)"
+  fi
+fi
+
 # Best-effort: read last card-added timestamp from telemetry.
 TELEMETRY="${HOME}/.agents/skills/board-steward/telemetry/events.jsonl"
 [ -f "${TELEMETRY}" ] || TELEMETRY="$(dirname "$0")/../telemetry/events.jsonl"
