@@ -10,7 +10,6 @@
     { "id": "backlog",    "name": "Backlog",      "kind": "todo",   "stackUnder": null },
     { "id": "task",       "name": "📥 Task",      "kind": "todo",   "stackUnder": null },
     { "id": "inprogress", "name": "In Progress",  "kind": "active", "stackUnder": null },
-    { "id": "bugged",     "name": "🐞 Bugged",    "kind": "blocked","stackUnder": null },
     { "id": "done",       "name": "Done",         "kind": "done",   "stackUnder": null }
   ],
   "cards": []

@@ -26,7 +26,6 @@
     --col-backlog:      #FDFAF5; /* soft camel */
     --col-inprogress:   #FDFCF6; /* vanilla ice cream */
     --col-blocked:      #FAF8FC; /* blueberry cream */
-    --col-bugged:       #FDF3F1; /* warm pink — bug column */
     --col-done:         #F9FCF9; /* morning mist */
     --shadow:       0 1px 0 rgba(44,38,32,.08), 0 1px 2px rgba(44,38,32,.05);
     --shadow-hover: 0 4px 12px rgba(44,38,32,.10), 0 1px 3px rgba(44,38,32,.06);
@@ -339,7 +338,6 @@
   .column[data-col="backlog"]    { background: var(--col-backlog); }
   .column[data-col="inprogress"] { background: var(--col-inprogress); }
   .column[data-col="blocked"]    { background: var(--col-blocked); }
-  .column[data-col="bugged"]     { background: var(--col-bugged); }
   .column[data-col="done"]       { background: var(--col-done); }
   .column.dragover { background: #F1E9DF; box-shadow: inset 0 0 0 2px var(--accent); }
   /* #119 — while a card is mid-drag, dim its SOURCE column so it's obvious
@@ -1113,7 +1111,7 @@
     <button data-view="board" class="active">Board</button>
     <button data-view="calendar">Calendar</button>
   </span>
-  <button id="reset-cols-btn" class="header-pill" style="display:none" title="Restore default column order: Task → Backlog → In Progress → Bugged → Done → Notes, then others by recency">↺ Reset columns</button>
+  <button id="reset-cols-btn" class="header-pill" style="display:none" title="Restore default column order: Task → Backlog → In Progress → Done → Notes, then others by recency">↺ Reset columns</button>
 </header>
 
 <!-- Tag legend popover (anchored under #tags-btn) -->
@@ -2596,7 +2594,7 @@ function enterApp() {
 async function resetColumnsToDefault() {
   if (!state) return;
   if (!(await miniConfirm('Reset column order?', {
-    sub: 'Reorders columns to: Task → Backlog → In Progress → Bugged → Done → Notes, then the rest by latest activity. Also flattens any stacked columns back into a row. No cards or columns are deleted — ' + undoHint() + ' to undo.',
+    sub: 'Reorders columns to: Task → Backlog → In Progress → Done → Notes, then the rest by latest activity. Also flattens any stacked columns back into a row. No cards or columns are deleted — ' + undoHint() + ' to undo.',
     okText: 'Reset',
     okClass: 'primary',
   }))) return;
@@ -2606,7 +2604,6 @@ async function resetColumnsToDefault() {
     c => c.id === 'task' || /^task$/i.test(c.name || ''),
     c => c.id === 'backlog' || /^backlog$/i.test(c.name || ''),
     c => c.id === 'inprogress' || /^in\s*progress$/i.test(c.name || ''),
-    c => c.id === 'bugged' || /^(?:🐞\s*)?bugged$/i.test(c.name || ''),
     c => c.id === 'done' || /^done$/i.test(c.name || ''),
     c => /^notes$/i.test(c.name || ''),
   ];

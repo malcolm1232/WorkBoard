@@ -354,18 +354,10 @@ def cmd_move(args, d, board):
 # `card.py sim` to verify the end-to-end visual is intact.
 # ═════════════════════════════════════════════════════════════════════
 def cmd_sim(args, d, board):
-    parts = args.intervals.split(",")
     try:
-        gaps = [float(x) for x in parts]
+        gap_ip, gap_done = (float(x) for x in args.intervals.split(","))
     except Exception:
-        sys.exit("--intervals must be comma-separated seconds, e.g. '2,3,5'")
-    if len(gaps) == 3:
-        gap_ip, gap_bug, gap_done = gaps
-    elif len(gaps) == 2:
-        # Back-compat: 'ip,done' → expand into 'ip,bug,done' with bug=ip
-        gap_ip, gap_bug, gap_done = gaps[0], gaps[0], gaps[1]
-    else:
-        sys.exit("--intervals must be 'ip,bug,done' (or legacy 'ip,done')")
+        sys.exit("--intervals must be 'task→ip,ip→done' seconds, e.g. '2,5'")
 
     title = args.title or f"SIMULATION {now_iso()[11:19].replace(':', '')}"
     writeup = args.writeup or f"Sim via card.py sim (intervals {args.intervals}s)."
@@ -382,23 +374,15 @@ def cmd_sim(args, d, board):
     cmd_add(add_ns, d, board)
     num = d["nextNum"] - 1
 
-    # Step 2 — MOVE to In Progress.
+    # Step 2 — MOVE to In Progress (5s+ default to watch the pulse).
     time.sleep(gap_ip)
-    d = load(board)
+    d = load(board)  # reload in case anything else touched the board
     cmd_move(argparse.Namespace(
         ref=str(num), column="inprogress",
         writeup=None, writeup_stdin=False,
     ), d, board)
 
-    # Step 3 — MOVE to Bugged (simulating a bug surfacing mid-work).
-    time.sleep(gap_bug)
-    d = load(board)
-    cmd_move(argparse.Namespace(
-        ref=str(num), column="bugged",
-        writeup=None, writeup_stdin=False,
-    ), d, board)
-
-    # Step 4 — MOVE to Done with auto writeup.
+    # Step 3 — MOVE to Done with auto writeup.
     time.sleep(gap_done)
     d = load(board)
     cmd_move(argparse.Namespace(
@@ -623,8 +607,8 @@ def build_parser():
     psim = sub.add_parser("sim", help="run canonical lifecycle: task → inprogress → done")
     psim.add_argument("--title", default=None, help="card title (default: auto-named)")
     psim.add_argument("--priority", default="mid", choices=["critical", "mid", "low"])
-    psim.add_argument("--intervals", default="2,3,5",
-                      help="seconds between phases: 'task→ip,ip→bugged,bugged→done' (default '2,3,5'). Legacy 'ip,done' still accepted (bug=ip).")
+    psim.add_argument("--intervals", default="2,5",
+                      help="seconds between phases: 'task→ip,ip→done' (default '2,5')")
     psim.add_argument("--writeup", default=None, help="custom done writeup (auto if omitted)")
     psim.set_defaults(fn=cmd_sim)
 
