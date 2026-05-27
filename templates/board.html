@@ -3889,6 +3889,24 @@ function renderColumn(col, cards) {
     state.cards.push(card);
     scheduleSave();
     openModal(card.id);
+    // #186 — for newly-added cards: focus + select-all the title so the
+    // user can type over "New card" immediately. First blur (caused by
+    // Enter — see title keydown handler — or by clicking outside the
+    // title) commits the title and closes the modal. One-shot so it
+    // doesn't fire on later edits.
+    requestAnimationFrame(() => {
+      const titleEl = document.querySelector('#modal-overlay .modal-title');
+      if (!titleEl) return;
+      titleEl.focus();
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(titleEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (_) {}
+      titleEl.addEventListener('blur', () => closeModal(), { once: true });
+    });
   };
   el.appendChild(addBtn);
 
