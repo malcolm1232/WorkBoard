@@ -340,6 +340,16 @@ def cmd_update(args, d, board):
     print(f"~ #{c['num']} {','.join(changed)} (rev {rev})")
 
 
+def _autocheck_subtasks(nodes, ts):
+    """Recursively mark all open subtasks done (with doneAt=ts)."""
+    for st in nodes:
+        if not st.get("done"):
+            st["done"] = True
+            st["doneAt"] = ts
+        if st.get("children"):
+            _autocheck_subtasks(st["children"], ts)
+
+
 def cmd_move(args, d, board):
     c = find_card(d, args.ref)
     old = c["column"]
@@ -349,6 +359,11 @@ def cmd_move(args, d, board):
         # Auto-strip the 'bug' tag on done — regression is fixed.
         if "bug" in (c.get("tags") or []):
             c["tags"] = [t for t in c["tags"] if t != "bug"]
+        # Auto-check all open subtasks — the card being Done implies the
+        # work is done. If a subtask was deliberately unfinished, the user
+        # should have pre-unfinished it before shipping (or used 'improve'
+        # to add it back as a new open subtask after the fact).
+        _autocheck_subtasks(c.get("subtasks") or [], now_iso())
     elif args.column != "done" and old == "done":
         c["doneAt"] = None  # un-done
     wu = maybe_stdin(args.writeup, args.writeup_stdin)

@@ -1763,6 +1763,15 @@ function commitCardDrag() {
     card.tags = card.tags.filter(t => t !== 'bug');
     if (_cardDrag.srcEl) _cardDrag.srcEl.classList.remove('is-bug');
   }
+  // Auto-check all open subtasks on done (the card being Done = work done).
+  if (targetCol === 'done' && (card.subtasks || []).length) {
+    const ts = now();
+    const walk = nodes => nodes.forEach(st => {
+      if (!st.done) { st.done = true; st.doneAt = ts; }
+      if (st.children && st.children.length) walk(st.children);
+    });
+    walk(card.subtasks);
+  }
   state.cards.splice(insertIdx, 0, card);
   // DOM is already correct (preview did the insertBefore). Don't render() —
   // it would rebuild the DOM from scratch and kill the in-flight FLIPs that
