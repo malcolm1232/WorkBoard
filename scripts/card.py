@@ -34,11 +34,12 @@ walking up the tree):
     card.py show 65
     card.py list --column inprogress
 
-THE 4 CANONICAL LIFECYCLE TRANSITIONS (see VISION.md §4):
-    1. CREATE          card.py add --title "..." --column task --priority mid
-    2. BEGIN           card.py move <ref> inprogress
-    3. SHIP            card.py move <ref> done --writeup "..."
-    4. REOPEN-AS-BUG   card.py bug <ref>                  (Done → IP + 'bug' tag)
+THE 5 CANONICAL LIFECYCLE TRANSITIONS (see VISION.md §4):
+    1. CREATE              card.py add --title "..." --column task --priority mid
+    2. BEGIN               card.py move <ref> inprogress
+    3. SHIP                card.py move <ref> done --writeup "..."
+    4. REOPEN-AS-BUG       card.py bug <ref>                (Done → IP + 'bug' tag)
+    5. REOPEN-AS-IMPROVE   card.py improve <ref> "..."     (Done → IP + new subtask)
 
 Plus the end-to-end wrappers:
     card.py sim                 — task → ip → done (canonical happy path)
@@ -366,6 +367,34 @@ def cmd_move(args, d, board):
 # (window.runLifecycle() in board.html). When adding features, run
 # `card.py sim` to verify the end-to-end visual is intact.
 # ═════════════════════════════════════════════════════════════════════
+def cmd_improve(args, d, board):
+    """IMPROVE transition. Done → In Progress + add a new subtask.
+
+    The 5th canonical lifecycle verb (see VISION.md §4). Use this when a
+    shipped card needs an enhancement (not a regression — for regressions
+    use `card.py bug`). The new subtask captures *what's being added*;
+    the parent card stays the same card across improvements (VISION.md:
+    'subtasks tree out inside the card, parent never leaves').
+    """
+    c = find_card(d, args.ref)
+    old = c["column"]
+    c["column"] = "inprogress"
+    c["doneAt"] = None
+    c.setdefault("subtasks", [])
+    sid = new_subtask_id(c)
+    c["subtasks"].append({
+        "id": sid,
+        "text": args.text,
+        "done": False,
+        "createdAt": now_iso(),
+        "children": [],
+    })
+    c["lastTouchedSubtask"] = sid
+    c["updatedAt"] = now_iso()
+    rev = atomic_save(board, d)
+    print(f"✨ #{c['num']} {old} → inprogress (+subtask {sid}) (rev {rev})")
+
+
 def cmd_bug(args, d, board):
     """REOPEN-AS-BUG transition. Done → In Progress + 'bug' tag.
 
@@ -661,6 +690,11 @@ def build_parser():
     pbug = sub.add_parser("bug", help="reopen a Done card as a bug (Done → In Progress + 'bug' tag)")
     pbug.add_argument("ref", help="card num or id")
     pbug.set_defaults(fn=cmd_bug)
+
+    pimp = sub.add_parser("improve", help="add an improvement subtask + reopen (Done → In Progress + new subtask)")
+    pimp.add_argument("ref", help="card num or id")
+    pimp.add_argument("text", help="subtask text (the improvement)")
+    pimp.set_defaults(fn=cmd_improve)
 
     psim = sub.add_parser("sim", help="run canonical lifecycle: task → inprogress → done")
     psim.add_argument("--title", default=None, help="card title (default: auto-named)")

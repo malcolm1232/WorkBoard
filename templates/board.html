@@ -1073,6 +1073,14 @@
     font-size: 11px; font-weight: 600; margin-right: 8px;
   }
   .modal-reopen-bug:hover { background: #C8553D; color: #fff; border-color: #C8553D; }
+  /* #177 — Improve button. Sage palette so it reads as 'enhancement', distinct
+     from the coral bug button (regression). */
+  .modal-improve {
+    background: transparent; border: 1px solid #A8C5A0; color: #5A8F55;
+    padding: 5px 12px; border-radius: 3px; cursor: pointer;
+    font-size: 11px; font-weight: 600; margin-right: 8px;
+  }
+  .modal-improve:hover { background: #5A8F55; color: #fff; border-color: #5A8F55; }
   /* #164 — Cards tagged 'bug' get a warm-pink left border + 🐞 corner
      glyph for high-visibility. Tied to the existing red 'bug' tag in the
      taxonomy. Auto-stripped when the card lands in Done (regression fixed). */
@@ -2683,13 +2691,20 @@ function renderModal(card) {
   foot.appendChild(dates);
 
   // #164 — Reopen as bug: only shown on Done cards. Moves the card back
-  // to In Progress and stamps a 'bugged' tag so the regression is visible
-  // forever in card history.
+  // to In Progress and stamps a 'bug' tag so the regression is visible
+  // until the next ship (then auto-stripped).
   if (card.column === 'done') {
+    const impBtn = document.createElement('button');
+    impBtn.className = 'modal-improve';
+    impBtn.textContent = '✨ Improve';
+    impBtn.title = 'Add an improvement subtask + reopen back to In Progress (no bug tag — this is an enhancement)';
+    impBtn.onclick = () => improveCard(card.id);
+    foot.appendChild(impBtn);
+
     const bugBtn = document.createElement('button');
     bugBtn.className = 'modal-reopen-bug';
     bugBtn.textContent = '🐞 Reopen as bug';
-    bugBtn.title = 'Move back to In Progress + add a "bugged" tag';
+    bugBtn.title = 'Move back to In Progress + add a "bug" tag';
     bugBtn.onclick = () => reopenAsBug(card.id);
     foot.appendChild(bugBtn);
   }
@@ -4077,6 +4092,34 @@ function handleCardRemoved({ id }) {
 // stamps a 'bugged' tag so the regression is visible in card history.
 // The card immediately picks up the In Progress pulse via the existing
 // applyActiveWorkTransition path.
+// #177 — reopen a Done card as an improvement. Prompts for the subtask
+// text, moves the card back to In Progress, appends a new open subtask.
+// No bug tag (deliberate enhancement, not a regression).
+async function improveCard(id) {
+  if (!state) return;
+  const card = state.cards.find(c => c.id === id);
+  if (!card || card.column !== 'done') return;
+  const text = prompt('What improvement? (will be added as a new subtask)', '');
+  if (!text || !text.trim()) return;
+  pushUndo();
+  const from = card.column;
+  card.column = 'inprogress';
+  card.doneAt = null;
+  card.subtasks = card.subtasks || [];
+  const sid = 's-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1000);
+  card.subtasks.push({
+    id: sid, text: text.trim(), done: false,
+    createdAt: now(), children: [],
+  });
+  card.lastTouchedSubtask = sid;
+  card.updatedAt = now();
+  closeModal();
+  scheduleSave();
+  render();
+  applyActiveWorkTransition(card.id, from, 'inprogress');
+  toast('✨ Reopened as improvement — ' + undoHint() + ' to undo', 3200);
+}
+
 function reopenAsBug(id) {
   if (!state) return;
   const card = state.cards.find(c => c.id === id);
