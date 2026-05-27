@@ -287,6 +287,28 @@ class BoardHandler(BaseHTTPRequestHandler):
                 rev, cards = -1, 0
             with _clients_lock:
                 n_clients = len(_clients)
+            # #177 — include current git commit (short SHA + first line of
+            # message) so the Logs HUD can show "running fde639b" without a
+            # separate round-trip. Best-effort; silent fail if not a repo.
+            commit_sha, commit_msg = "", ""
+            try:
+                # Walk up from board_dir looking for a .git
+                cur = self.board_dir.resolve()
+                for _ in range(6):
+                    if (cur / ".git").exists():
+                        commit_sha = subprocess.check_output(
+                            ["git", "-C", str(cur), "rev-parse", "--short", "HEAD"],
+                            stderr=subprocess.DEVNULL, timeout=1
+                        ).decode().strip()
+                        commit_msg = subprocess.check_output(
+                            ["git", "-C", str(cur), "log", "-1", "--pretty=%s"],
+                            stderr=subprocess.DEVNULL, timeout=1
+                        ).decode().strip()
+                        break
+                    if cur.parent == cur: break
+                    cur = cur.parent
+            except Exception:
+                pass
             body = json.dumps({
                 "ok": True,
                 "project": str(self.board_dir.parent),
@@ -294,6 +316,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 "rev": rev,
                 "cards": cards,
                 "sseClients": n_clients,
+                "commit": commit_sha,
+                "commitMsg": commit_msg,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }).encode()
             self._send(200, body)

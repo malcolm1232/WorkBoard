@@ -1132,6 +1132,7 @@
     <button data-view="calendar">Calendar</button>
   </span>
   <button id="reset-cols-btn" class="header-pill" style="display:none" title="Restore default column order: Task → Backlog → In Progress → Done → Notes, then others by recency">↺ Reset columns</button>
+  <button id="logs-toggle-btn" class="header-pill" style="display:none" title="Toggle the Logs HUD (commit, time, live SSE event tail)">📜 Logs</button>
 </header>
 
 <!-- Tag legend popover (anchored under #tags-btn) -->
@@ -1276,6 +1277,143 @@ function dbg(msg) {
     }
   } catch (e) {}
   console.log('[#119]', msg);
+}
+
+// #177 — Logs HUD. User-facing visibility panel (separate from the
+// drag/debug HUD). Shows current commit + live clock + connection
+// status, with a tail of SSE lifecycle events. Bottom-right by default
+// (drag HUD lives top-right). Draggable, position + visibility persisted.
+const _LOGS_HUD_POS_KEY  = 'workboard.logsHudPos';
+const _LOGS_HUD_OPEN_KEY = 'workboard.logsHudOpen';
+let _logsClockTimer = null;
+let _logsCommitMeta = { sha: '', msg: '' };
+
+function _logsHud() {
+  let hud = document.getElementById('logs-hud');
+  if (hud) return hud;
+  hud = document.createElement('div');
+  hud.id = 'logs-hud';
+  hud.style.cssText = 'position:fixed;width:340px;max-height:260px;display:none;flex-direction:column;background:rgba(20,20,28,0.94);color:#cfd6df;font:11px/1.35 monospace;z-index:99998;border-radius:6px;border:1px solid rgba(207,214,223,0.25);box-shadow:0 6px 22px rgba(0,0,0,0.45);user-select:none;overflow:hidden;';
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(_LOGS_HUD_POS_KEY) || 'null'); } catch (e) {}
+  if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+    hud.style.left = saved.left + 'px';
+    hud.style.top  = saved.top + 'px';
+  } else {
+    hud.style.right  = '12px';
+    hud.style.bottom = '12px';
+  }
+  const head = document.createElement('div');
+  head.id = 'logs-hud-head';
+  head.style.cssText = 'color:#FFD479;border-bottom:1px solid rgba(207,214,223,0.18);padding:5px 10px;cursor:grab;background:rgba(255,212,121,0.06);display:flex;align-items:center;gap:8px;';
+  head.innerHTML = `
+    <span style="color:#FFD479;font-weight:600;">📜 LOGS</span>
+    <span id="logs-commit" style="color:#9adb9a;font-weight:600;" title="">—</span>
+    <span style="flex:1;"></span>
+    <span id="logs-clock" style="color:#cfd6df;font-variant-numeric:tabular-nums;">--:--:--</span>
+    <span id="logs-conn"  style="color:#888;" title="Connection status">●</span>
+    <button id="logs-close" style="background:transparent;border:0;color:#888;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;" title="Close">×</button>
+  `;
+  hud.appendChild(head);
+  const body = document.createElement('div');
+  body.id = 'logs-hud-body';
+  body.style.cssText = 'padding:6px 10px 8px;overflow-y:auto;flex:1;min-height:60px;';
+  hud.appendChild(body);
+  document.body.appendChild(hud);
+
+  // Draggable header (mirrors drag-hud pattern).
+  let drag = null;
+  head.addEventListener('mousedown', e => {
+    if (e.target.id === 'logs-close') return;
+    e.preventDefault();
+    const r = hud.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    head.style.cursor = 'grabbing';
+    hud.style.left = r.left + 'px';
+    hud.style.top  = r.top  + 'px';
+    hud.style.right = ''; hud.style.bottom = '';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const nx = Math.max(0, Math.min(window.innerWidth  - 60, e.clientX - drag.dx));
+    const ny = Math.max(0, Math.min(window.innerHeight - 24, e.clientY - drag.dy));
+    hud.style.left = nx + 'px';
+    hud.style.top  = ny + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!drag) return;
+    drag = null;
+    head.style.cursor = 'grab';
+    try {
+      localStorage.setItem(_LOGS_HUD_POS_KEY, JSON.stringify({
+        left: parseFloat(hud.style.left) || 0,
+        top:  parseFloat(hud.style.top)  || 0,
+      }));
+    } catch (e) {}
+  });
+  // Close button → hides + persists.
+  head.querySelector('#logs-close').addEventListener('click', () => toggleLogsHud(false));
+  return hud;
+}
+
+function toggleLogsHud(forceOpen) {
+  const hud = _logsHud();
+  const btn = document.getElementById('logs-toggle-btn');
+  const open = (typeof forceOpen === 'boolean') ? forceOpen : (hud.style.display === 'none');
+  hud.style.display = open ? 'flex' : 'none';
+  if (btn) btn.classList.toggle('active', open);
+  try { localStorage.setItem(_LOGS_HUD_OPEN_KEY, open ? '1' : '0'); } catch (e) {}
+  if (open) {
+    refreshLogsCommit();
+    if (!_logsClockTimer) {
+      _logsClockTimer = setInterval(() => {
+        const el = document.getElementById('logs-clock');
+        if (el) el.textContent = new Date().toTimeString().slice(0,8);
+      }, 1000);
+    }
+  } else if (_logsClockTimer) {
+    clearInterval(_logsClockTimer); _logsClockTimer = null;
+  }
+}
+
+async function refreshLogsCommit() {
+  try {
+    const r = await fetch('/health');
+    if (!r.ok) return;
+    const j = await r.json();
+    _logsCommitMeta = { sha: j.commit || '', msg: j.commitMsg || '' };
+    const el = document.getElementById('logs-commit');
+    if (el) {
+      el.textContent = j.commit ? '@ ' + j.commit : '(no git)';
+      el.title = j.commitMsg || '';
+    }
+    const conn = document.getElementById('logs-conn');
+    if (conn) {
+      const live = (j.sseClients || 0) > 0;
+      conn.style.color = live ? '#9adb9a' : '#FFD479';
+      conn.title = live ? `SSE live (${j.sseClients} client${j.sseClients>1?'s':''})` : 'SSE not connected';
+    }
+  } catch (e) {}
+}
+
+// Append a single line to the Logs HUD tail. Safe to call always — only
+// renders if the HUD is open (cheap check). Used by SSE handlers.
+function logEvent(kind, summary) {
+  const body = document.getElementById('logs-hud-body');
+  if (!body) return;
+  const line = document.createElement('div');
+  const t = new Date().toTimeString().slice(0,8);
+  const colorByKind = {
+    'add':    '#9adb9a',
+    'move':   '#7fb9ff',
+    'remove': '#ff8a7a',
+    'col':    '#FFD479',
+    'sys':    '#a09ab8',
+  };
+  const color = colorByKind[kind] || '#cfd6df';
+  line.innerHTML = `<span style="color:#777;">${t}</span> <span style="color:${color};">${kind.toUpperCase().padEnd(6, ' ')}</span> ${summary.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}`;
+  body.insertBefore(line, body.firstChild);
+  while (body.childNodes.length > 30) body.removeChild(body.lastChild);
 }
 document.addEventListener('DOMContentLoaded', () => {
   _dbgHud();
@@ -2621,6 +2759,15 @@ function enterApp() {
     resetBtn.style.display = '';
     resetBtn.onclick = resetColumnsToDefault;
   }
+  // #177 — Logs HUD toggle pill. Visibility persisted; closed by default.
+  const logsBtn = $('#logs-toggle-btn');
+  if (logsBtn) {
+    logsBtn.style.display = '';
+    logsBtn.onclick = () => toggleLogsHud();
+    let wasOpen = false;
+    try { wasOpen = localStorage.getItem(_LOGS_HUD_OPEN_KEY) === '1'; } catch (e) {}
+    if (wasOpen) toggleLogsHud(true);
+  }
   applyBoardTitle();
   wireBoardTitle();
   refreshTagLegend();
@@ -3738,6 +3885,7 @@ function handleCardAdded({ card }) {
   // If a brand-new card is born directly into In Progress, treat it as
   // a transition from "nothing" → inprogress.
   applyActiveWorkTransition(card.id, null, card.column);
+  logEvent('add', `#${card.num} "${card.title}" → ${card.column}`);
 }
 
 // Replays the user-drag visual sequence for a CLI/SSE-driven cross-column
@@ -3847,18 +3995,22 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
     simulateUserDragMove(card, fromColumn, toColumn, oldEl);
     refreshColumnCount(fromColumn);
     refreshColumnCount(toColumn);
+    logEvent('move', `#${card.num} ${fromColumn} → ${toColumn}`);
   } else {
     // In-place edit (title/priority/tags/subtask) — swap DOM, pulse + flash.
     const newEl = renderCardCompact(card);
     newEl.classList.add('flashing', 'pulsing');
     oldEl.replaceWith(newEl);
     setTimeout(() => newEl.classList.remove('flashing','pulsing'), 1300);
+    logEvent('move', `#${card.num} edited`);
   }
 }
 
 function handleCardRemoved({ id }) {
   if (!state) return;
+  const removed = state.cards.find(c => c.id === id);
   state.cards = state.cards.filter(c => c.id !== id);
+  if (removed) logEvent('remove', `#${removed.num} "${removed.title}"`);
   const el = findCardEl(id);
   if (!el) return;
   const colId = el.dataset.col;
@@ -3926,11 +4078,14 @@ function handleColumnAdded({ column, index }) {
   if (addBtn) boardEl.insertBefore(newCol, addBtn);
   else boardEl.appendChild(newCol);
   newCol.addEventListener('animationend', () => newCol.classList.remove('sliding-in'), { once: true });
+  logEvent('col', `+ column "${column.name || column.id}"`);
 }
 
 function handleColumnRemoved({ id }) {
   if (!state) return;
+  const removed = state.columns.find(c => c.id === id);
   state.columns = state.columns.filter(c => c.id !== id);
+  if (removed) logEvent('col', `− column "${removed.name || removed.id}"`);
   const el = findColumnEl(id);
   if (!el) return;
   el.style.transition = 'opacity 200ms ease, max-width 300ms ease';
