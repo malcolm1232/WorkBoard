@@ -1318,9 +1318,13 @@ function _logsHud() {
     hud.style.width  = savedSize.w + 'px';
     hud.style.height = savedSize.h + 'px';
   }
-  // Persist any future resize via the native bottom-right handle.
+  // Persist any future resize via the native bottom-right handle. Skip
+  // while minimized — otherwise collapsing the body fires the observer
+  // and overwrites localStorage with the tiny minimized height, so the
+  // next expand restores the collapsed size instead of the prior one.
   try {
     new ResizeObserver(() => {
+      if (hud.dataset.minimized === '1') return;
       try {
         localStorage.setItem(_LOGS_HUD_SIZE_KEY, JSON.stringify({
           w: hud.offsetWidth, h: hud.offsetHeight,
