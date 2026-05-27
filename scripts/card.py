@@ -49,7 +49,8 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 REGEN_SCRIPT = SKILL_DIR / "scripts" / "regen_index.py"
-SERVER_URL = os.environ.get("BOARD_SERVER", "http://127.0.0.1:7891")
+# Default fallback if no server is found by path-match. Override via BOARD_SERVER.
+DEFAULT_SERVER_URL = "http://127.0.0.1:7891"
 
 
 # ===== board locating =====
@@ -78,19 +79,56 @@ def load(p: Path) -> dict:
         return json.load(f)
 
 
-def _try_post_to_server(d: dict) -> bool:
-    """POST the state to the local board server if it's up.
+def _resolve_server_url(board_path: Path) -> str | None:
+    """Find the running board server that owns this board.json path.
+
+    Probes localhost ports in [7891, 7900] for /health; matches the one whose
+    `board` field equals the parent dir of our board.json. Returns the URL
+    on a match, None if no server claims this board (caller falls back to
+    direct file write — never to a wrong server).
+
+    Why: card.py used to hardcode :7891. Running it from a different project's
+    board would POST that project's data to whatever server was on :7891 —
+    silently clobbering the wrong board. This routes by board-path, not port.
+    """
+    env_url = os.environ.get("BOARD_SERVER")
+    if env_url:
+        return env_url  # explicit override wins
+    want = str(board_path.parent.resolve())
+    for port in range(7891, 7901):
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/health", timeout=0.4
+            ) as r:
+                if r.status != 200:
+                    continue
+                info = json.loads(r.read())
+                got = info.get("board")
+                if got and Path(got).resolve() == Path(want).resolve():
+                    return f"http://127.0.0.1:{port}"
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError,
+                json.JSONDecodeError):
+            continue
+    return None
+
+
+def _try_post_to_server(d: dict, board_path: Path) -> bool:
+    """POST the state to the running board server that owns this board.
 
     The server diffs vs prev cached state, broadcasts SSE events, writes the
     file atomically, and regenerates index.json. Returns True on success.
-    Silent failure → caller falls back to direct file write.
+    If no server owns this board, returns False so caller falls back to
+    direct file write — NEVER posts to a server with a different board.
     """
     if os.environ.get("BOARD_NO_SERVER") == "1":
+        return False
+    url = _resolve_server_url(board_path)
+    if not url:
         return False
     try:
         body = json.dumps(d, indent=2, ensure_ascii=False).encode()
         req = urllib.request.Request(
-            SERVER_URL.rstrip("/") + "/board.json",
+            url.rstrip("/") + "/board.json",
             data=body,
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -112,7 +150,7 @@ def atomic_save(p: Path, d: dict, regen: bool = True) -> int:
     d["savedAt"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     d["savedBy"] = "claude"
 
-    if _try_post_to_server(d):
+    if _try_post_to_server(d, p):
         return d["rev"]
 
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".board.", suffix=".tmp")
