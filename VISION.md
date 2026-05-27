@@ -125,3 +125,9 @@ These are durable, project-level instructions. Claude follows them on every turn
    Where `YYMMDD` is the local date (e.g. `260527` for 2026-05-27). These hold the full raw transcript of recent sessions — they are the canonical context for what was shipped, what was decided, and what's still open. Skipping this is what causes "we already discussed this" drift.
 
 3. **Dump full raw conversation at session end.** Append to today's file in the same dir. Format per `~/Desktop/conversation_history/instructions.md`. Never summarize; never overwrite.
+
+## Shorthand aliases (user vocab)
+
+- **`ss`** → screenshot. Always lives in `~/Desktop/ss/`. When user says "see latest ss" / "in desktop/ss", read the newest file in that directory with the `Read` tool.
+- **`wb`** → WorkBoard. The kanban skill repo at `~/Desktop/WorkBoard/`, served at `http://127.0.0.1:7892` (separate from the QuantifyMe board on `:7891`).
+- **`qm`** → QuantifyMe. The trading product at `~/Desktop/QuantifyMe/HFTAgents/`, board served at `http://127.0.0.1:7891`.

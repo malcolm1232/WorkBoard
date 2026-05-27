@@ -1632,7 +1632,11 @@ function renderCardCompact(card) {
   }
 
   el.addEventListener('dragstart', e => {
-    e.dataTransfer.setData('text/card-id', card.id);
+    // Safari rejects custom MIME types; mirror the id into text/plain so
+    // mouse-drag works in every browser. text/card-id is kept for back-compat.
+    e.dataTransfer.setData('text/plain', 'card:' + card.id);
+    try { e.dataTransfer.setData('text/card-id', card.id); } catch (_) {}
+    e.dataTransfer.effectAllowed = 'move';
     el.classList.add('dragging');
   });
   el.addEventListener('dragend', () => el.classList.remove('dragging'));
@@ -2778,7 +2782,11 @@ function renderColumn(col, cards) {
     if (document.body.classList.contains('col-dragging-active')) return;
     e.preventDefault();
     el.classList.remove('dragover');
-    const cardId = e.dataTransfer.getData('text/card-id');
+    let cardId = e.dataTransfer.getData('text/card-id');
+    if (!cardId) {
+      const plain = e.dataTransfer.getData('text/plain') || '';
+      if (plain.startsWith('card:')) cardId = plain.slice(5);
+    }
     if (!cardId) return;
     const card = state.cards.find(c => c.id === cardId);
     if (!card || card.column === col.id) return;
