@@ -3214,10 +3214,13 @@ function renderColumn(col, cards) {
     _colLastPreviewTargetId = null;
     // #119 correction — hide the source column's footprint so it doesn't
     // sit "in the background" while being dragged. setTimeout(0) so the
-    // browser captures the drag image synchronously before visibility flips.
+    // browser captures the drag image synchronously before opacity flips.
+    // Use opacity (not visibility:hidden) so the slot still receives drop
+    // events — otherwise releasing the cursor over the source's new slot
+    // fires no drop, and dragend reverts the swap.
     setTimeout(() => {
       const cur = document.querySelector('.column[data-col="' + cssEsc(col.id) + '"]');
-      if (cur) cur.style.visibility = 'hidden';
+      if (cur) cur.style.opacity = '0';
     }, 0);
     dbg('col dragstart ' + col.id);
   });
@@ -3247,10 +3250,10 @@ function renderColumn(col, cards) {
       requestAnimationFrame(() => flipPlayColumns(old));
     } else {
       dbg('col dragend (committed)');
-      // Source DOM element survives a committed drop; un-hide it.
-      el.style.visibility = '';
+      // Source DOM element survives a committed drop; restore opacity.
+      el.style.opacity = '';
       // Defensive: clear any stray hidden state on other columns.
-      document.querySelectorAll('.column').forEach(c => { c.style.visibility = ''; });
+      document.querySelectorAll('.column').forEach(c => { c.style.opacity = ''; });
     }
   });
   // Reorder on drop onto another column's edge. #117: if drop lands in the
@@ -3401,7 +3404,8 @@ function renderColumn(col, cards) {
 
   // #119 correction — keep the dragged column invisible through re-renders.
   // _colDragSrcId is set during a column drag; cleared on dragend.
-  if (_colDragSrcId === col.id) el.style.visibility = 'hidden';
+  // opacity:0 (not visibility:hidden) so drop events still fire on the slot.
+  if (_colDragSrcId === col.id) el.style.opacity = '0';
 
   return el;
 }
