@@ -3419,7 +3419,12 @@ function renderColumn(col, cards) {
     // checking cursor X against the source's original bbox.
     if (_colDragSrcId && _colDragSnapshot && _colLastPreviewTargetId && _colDragRects) {
       const srcOrigRect = _colDragRects.get(_colDragSrcId);
-      if (srcOrigRect && e.clientX >= srcOrigRect.left && e.clientX <= srcOrigRect.right) {
+      // #132 — inset by 30px on each side so the revert zone doesn't share a
+      // boundary with the adjacent slot's preview-target zone. Without this,
+      // cursor jitter at the slot boundary oscillates between preview (just
+      // outside source bbox) and revert (just inside).
+      const REVERT_INSET = 30;
+      if (srcOrigRect && e.clientX >= srcOrigRect.left + REVERT_INSET && e.clientX <= srcOrigRect.right - REVERT_INSET) {
         el.classList.remove('col-drop-stack-target');
         const oldR = captureColumnRects();
         state.columns = JSON.parse(JSON.stringify(_colDragSnapshot));
