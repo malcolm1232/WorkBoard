@@ -6,11 +6,11 @@
   "nextNum": 1,
   "schemaVersion": 1,
   "columns": [
-    { "id": "ideas",      "name": "💡 Ideas",     "kind": "intake" },
-    { "id": "backlog",    "name": "Backlog",      "kind": "todo"   },
-    { "id": "task",       "name": "📥 Task",      "kind": "todo"   },
-    { "id": "inprogress", "name": "In Progress",  "kind": "active" },
-    { "id": "done",       "name": "Done",         "kind": "done"   }
+    { "id": "ideas",      "name": "💡 Ideas",     "kind": "intake", "stackUnder": null },
+    { "id": "backlog",    "name": "Backlog",      "kind": "todo",   "stackUnder": null },
+    { "id": "task",       "name": "📥 Task",      "kind": "todo",   "stackUnder": null },
+    { "id": "inprogress", "name": "In Progress",  "kind": "active", "stackUnder": null },
+    { "id": "done",       "name": "Done",         "kind": "done",   "stackUnder": null }
   ],
   "cards": []
 }

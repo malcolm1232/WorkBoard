@@ -1120,6 +1120,71 @@ let _prevSnapshot = new Map(); // id → "updatedAt|column" from previous render
 let _flashIds = new Set();     // ids to flash on the upcoming render
 let _colDragRects = null;      // id → DOMRect at dragstart (for FLIP)
 
+// ===== Column stacking schema (#117 — schema only; no render impact yet) =====
+// A column may sit BELOW another column in a vertical stack via the
+// `stackUnder` field. null/missing = top-level column with its own slot in
+// the horizontal flex layout. Non-null = sits directly under its parent.
+//
+// Render (added in #117 part 2) walks state.columns in array order, groups by
+// stack root, and lays out each root → its descendants as one vertical stack
+// container. Until then, all columns stay flat regardless of stackUnder value
+// — these helpers are dormant.
+//
+// Invariants enforced on load (_absorbState): every column has stackUnder;
+// dangling parent refs (parent deleted) are reset to null; cycles get broken
+// at the first repeat (the offender becomes a root).
+function getStackRoots() {
+  return (state && state.columns || []).filter(c => !c.stackUnder);
+}
+function getStackChildren(parentId) {
+  return (state && state.columns || []).filter(c => c.stackUnder === parentId);
+}
+// Walk a stack chain from a root, depth-first by state.columns array order.
+// Returns [root, child, grandchild, ...]. Depth-capped at 32 as a cycle/abuse
+// guard — real boards will never approach this.
+function walkStack(rootId) {
+  if (!state) return [];
+  const byId = new Map(state.columns.map(c => [c.id, c]));
+  const root = byId.get(rootId);
+  if (!root) return [];
+  const out = [];
+  const seen = new Set();
+  function visit(id, depth) {
+    if (depth > 32 || seen.has(id)) return;
+    seen.add(id);
+    const col = byId.get(id);
+    if (!col) return;
+    out.push(col);
+    getStackChildren(id).forEach(child => visit(child.id, depth + 1));
+  }
+  visit(rootId, 0);
+  return out;
+}
+// Columns in render order: roots in state.columns order, each root immediately
+// followed by its descendants. Used by the upcoming render pass.
+function stackOrderedColumns() {
+  const roots = getStackRoots();
+  const out = [];
+  roots.forEach(r => walkStack(r.id).forEach(c => out.push(c)));
+  // Safety: append any column the walk missed (cycle survivor / orphan).
+  if (out.length < (state.columns || []).length) {
+    const seen = new Set(out.map(c => c.id));
+    state.columns.forEach(c => { if (!seen.has(c.id)) out.push(c); });
+  }
+  return out;
+}
+// Normalise stackUnder fields on incoming state: every column gets the field
+// (default null); dangling refs reset to null. Idempotent.
+function migrateStackUnder(s) {
+  if (!s || !Array.isArray(s.columns)) return;
+  const ids = new Set(s.columns.map(c => c.id));
+  s.columns.forEach(c => {
+    if (!('stackUnder' in c)) c.stackUnder = null;
+    if (c.stackUnder && !ids.has(c.stackUnder)) c.stackUnder = null;
+    if (c.stackUnder === c.id) c.stackUnder = null;   // self-parent guard
+  });
+}
+
 // Capture all column bounding rects (FLIP "first" step).
 function captureColumnRects() {
   const map = new Map();
@@ -1379,6 +1444,7 @@ function _absorbState(incoming) {
   if (state.nextNum == null) {
     state.nextNum = (state.cards || []).reduce((m, c) => Math.max(m, c.num || 0), 0) + 1;
   }
+  migrateStackUnder(state);
   lastRev = state.rev || 0;
   pendingDirty = false;
   if (document.getElementById('board-title')) applyBoardTitle();
