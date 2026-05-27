@@ -3632,6 +3632,81 @@ function handleCardAdded({ card }) {
   refreshColumnCount(card.column);
 }
 
+// Replays the user-drag visual sequence for a CLI/SSE-driven cross-column
+// card move. Mirrors dragstart → dragover-reflow → drop:
+//   PICKUP (200ms): source column dims (.card-src-col 0.55), original card
+//     gets .dragging (opacity 0.45 + rotate 1.5deg), a ghost clone appears
+//     at the source rect with lift + tilt + shadow.
+//   RESERVE: ghost is in flight; the real new card is appended (hidden) at
+//     the destination so siblings FLIP-reflow to open the slot.
+//   TRAVEL (720ms): ghost flies from source rect to dest rect, scale 1.04 →
+//     1.0, rotate 1.5deg → 0, shadow heavy → light. Same easing as user
+//     drag (cubic-bezier(0.34, 1.45, 0.64, 1)).
+//   DROP: ghost removed, real card revealed, source column un-dims.
+function simulateUserDragMove(card, fromColumn, toColumn, oldEl) {
+  const srcRect  = oldEl.getBoundingClientRect();
+  const srcColEl = findColumnEl(fromColumn);
+  const dstColEl = findColumnEl(toColumn);
+  if (!dstColEl) { render(); return; }
+  const dstBody = dstColEl.querySelector('.column-body');
+  if (!dstBody) { render(); return; }
+
+  // PICKUP — mirrors dragstart.
+  if (srcColEl) srcColEl.classList.add('card-src-col');
+  oldEl.classList.add('dragging');
+
+  const ghost = renderCardCompact(card);
+  ghost.style.position      = 'fixed';
+  ghost.style.left          = srcRect.left + 'px';
+  ghost.style.top           = srcRect.top  + 'px';
+  ghost.style.width         = srcRect.width  + 'px';
+  ghost.style.height        = srcRect.height + 'px';
+  ghost.style.margin        = '0';
+  ghost.style.zIndex        = '2000';
+  ghost.style.pointerEvents = 'none';
+  ghost.style.boxShadow     = '0 14px 32px rgba(0,0,0,0.24)';
+  ghost.style.transform     = 'scale(1.04) rotate(1.5deg)';
+  ghost.style.transition    = 'transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 180ms ease';
+  document.body.appendChild(ghost);
+
+  // 200ms pickup pause, then reserve slot + fly.
+  setTimeout(() => {
+    const before = captureCardRects();
+    oldEl.remove();
+    const newEl = renderCardCompact(card);
+    newEl.style.visibility = 'hidden';   // revealed when ghost lands
+    dstBody.appendChild(newEl);
+
+    // FLIP siblings only — destination cards slide aside to open the slot,
+    // source cards slide up to close the gap.
+    const beforeSiblings = new Map(before);
+    beforeSiblings.delete(card.id);
+    flipPlayCards(beforeSiblings);
+
+    const dstRect = newEl.getBoundingClientRect();
+    const dx = dstRect.left - srcRect.left;
+    const dy = dstRect.top  - srcRect.top;
+
+    const anim = ghost.animate(
+      [
+        { transform: 'scale(1.04) rotate(1.5deg) translate(0, 0)',
+          boxShadow: '0 14px 32px rgba(0,0,0,0.24)' },
+        { transform: `scale(1.0) rotate(0deg) translate(${dx}px, ${dy}px)`,
+          boxShadow: '0 2px 6px rgba(0,0,0,0.08)' },
+      ],
+      { duration: 720, easing: 'cubic-bezier(0.34, 1.45, 0.64, 1)', fill: 'both' }
+    );
+    const land = () => {
+      newEl.style.visibility = '';
+      try { ghost.remove(); } catch (_) {}
+      if (srcColEl) srcColEl.classList.remove('card-src-col');
+      try { anim.cancel(); } catch (_) {}
+    };
+    anim.addEventListener('finish', land, { once: true });
+    anim.addEventListener('cancel', land, { once: true });
+  }, 200);
+}
+
 function handleCardUpdated({ card, fromColumn, toColumn }) {
   if (!state) return;
   const idx = state.cards.findIndex(c => c.id === card.id);
@@ -3643,61 +3718,9 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
   if (!oldEl) { handleCardAdded({ card }); return; }
 
   if (fromColumn && toColumn && fromColumn !== toColumn) {
-    // #121 — FLIP every card on the board so siblings in the source column
-    // slide up to close the gap. #139 — the MOVED card crosses columns, so
-    // dest's .column-body overflow:auto would clip it mid-transit. Lift it
-    // to position:fixed for the duration of its animation so it floats
-    // above all columns/shadows, then restore.
-    const before = captureCardRects();
-    const movedOldRect = oldEl.getBoundingClientRect();
-    oldEl.remove();
-    const target = findColumnEl(toColumn);
-    if (!target) { render(); return; }
-    const body = target.querySelector('.column-body');
-    const newEl = renderCardCompact(card);
-    body.appendChild(newEl);
-    requestAnimationFrame(() => {
-      // FLIP siblings (cards that didn't change column) the normal way —
-      // an in-place translate stays within their own .column-body bounds.
-      const beforeSiblings = new Map(before);
-      beforeSiblings.delete(card.id);
-      flipPlayCards(beforeSiblings);
-      // The MOVED card crosses columns, so we lift it OUT of dest's
-      // overflow:auto clip box. Capture its target rect, then reposition
-      // it position:fixed at the source's old rect, animate to the target
-      // rect, and restore on finish.
-      const newRect = newEl.getBoundingClientRect();
-      newEl.style.position = 'fixed';
-      newEl.style.left   = movedOldRect.left + 'px';
-      newEl.style.top    = movedOldRect.top  + 'px';
-      newEl.style.width  = movedOldRect.width  + 'px';
-      newEl.style.height = movedOldRect.height + 'px';
-      newEl.style.zIndex = '1000';
-      newEl.style.boxShadow = '0 12px 32px rgba(0,0,0,0.22)';
-      newEl.style.margin = '0';
-      const dx = newRect.left - movedOldRect.left;
-      const dy = newRect.top  - movedOldRect.top;
-      const anim = newEl.animate(
-        [
-          { transform: 'translate(0, 0)' },
-          { transform: `translate(${dx}px, ${dy}px)` },
-        ],
-        { duration: 1080, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)', fill: 'both' }
-      );
-      const cleanup = () => {
-        newEl.style.position = '';
-        newEl.style.left = '';
-        newEl.style.top  = '';
-        newEl.style.width  = '';
-        newEl.style.height = '';
-        newEl.style.zIndex = '';
-        newEl.style.boxShadow = '';
-        newEl.style.margin = '';
-        try { anim.cancel(); } catch (_) {}
-      };
-      anim.addEventListener('finish', cleanup, { once: true });
-      anim.addEventListener('cancel', cleanup, { once: true });
-    });
+    // Replay the user-drag visual exactly: source dims, card lifts, ghost
+    // glides across, destination siblings reflow, ghost lands.
+    simulateUserDragMove(card, fromColumn, toColumn, oldEl);
     refreshColumnCount(fromColumn);
     refreshColumnCount(toColumn);
   } else {
