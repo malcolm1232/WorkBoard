@@ -3411,6 +3411,25 @@ function renderColumn(col, cards) {
     if (!draggingColId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    // #131 — if a preview is in flight AND cursor is over the source's
+    // ORIGINAL slot (i.e. user is dragging back to where they started),
+    // revert state.columns to the dragstart snapshot. The slot is now
+    // occupied by whichever column shifted into it during preview, so this
+    // dragover fires on THAT column — we identify "back to origin" by
+    // checking cursor X against the source's original bbox.
+    if (_colDragSrcId && _colDragSnapshot && _colLastPreviewTargetId && _colDragRects) {
+      const srcOrigRect = _colDragRects.get(_colDragSrcId);
+      if (srcOrigRect && e.clientX >= srcOrigRect.left && e.clientX <= srcOrigRect.right) {
+        el.classList.remove('col-drop-stack-target');
+        const oldR = captureColumnRects();
+        state.columns = JSON.parse(JSON.stringify(_colDragSnapshot));
+        _colLastPreviewTargetId = null;
+        render();
+        requestAnimationFrame(() => flipPlayColumns(oldR));
+        dbg('col preview reverted — back to origin');
+        return;
+      }
+    }
     if (_inStackZone(e)) {
       // Stack zone: keep flat order (no live reorder) and show the stack hint.
       el.classList.add('col-drop-stack-target');
