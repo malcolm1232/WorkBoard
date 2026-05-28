@@ -92,36 +92,54 @@ def load(p: Path) -> dict:
         return json.load(f)
 
 
+def _verify_port_owns_board(port: int, want_dir: str) -> bool:
+    """Health-ping a single port and confirm its `board` field matches `want_dir`.
+    Returns False on any failure (timeout, wrong board, dead port)."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=0.4
+        ) as r:
+            if r.status != 200:
+                return False
+            info = json.loads(r.read())
+            got = info.get("board")
+            return bool(got and Path(got).resolve() == Path(want_dir).resolve())
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError,
+            json.JSONDecodeError):
+        return False
+
+
 def _resolve_server_url(board_path: Path) -> str | None:
     """Find the running board server that owns this board.json path.
 
-    Probes localhost ports in [7891, 7900] for /health; matches the one whose
-    `board` field equals the parent dir of our board.json. Returns the URL
-    on a match, None if no server claims this board (caller falls back to
-    direct file write — never to a wrong server).
+    Priority order:
+      1. $BOARD_SERVER env var (explicit override).
+      2. Port registry (~/.config/board-steward/port-registry.json) — O(1)
+         lookup, verified via /health to handle stale entries (#107).
+      3. Probe [7891, 7900] /health and match by `board` field — safety net
+         when registry missing or out of sync.
 
-    Why: card.py used to hardcode :7891. Running it from a different project's
-    board would POST that project's data to whatever server was on :7891 —
-    silently clobbering the wrong board. This routes by board-path, not port.
-    """
+    Returns the URL on a match, None if no server claims this board (caller
+    falls back to direct file write — never POSTs to a wrong server)."""
     env_url = os.environ.get("BOARD_SERVER")
     if env_url:
-        return env_url  # explicit override wins
+        return env_url
     want = str(board_path.parent.resolve())
+
+    # Registry-first (#107)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import port_registry
+        cached_port = port_registry.lookup(want)
+        if cached_port and _verify_port_owns_board(cached_port, want):
+            return f"http://127.0.0.1:{cached_port}"
+    except Exception:
+        pass  # any registry failure → fall through to probe
+
+    # Probe fallback (back-compat, also handles unregistered ad-hoc servers)
     for port in range(7891, 7901):
-        try:
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/health", timeout=0.4
-            ) as r:
-                if r.status != 200:
-                    continue
-                info = json.loads(r.read())
-                got = info.get("board")
-                if got and Path(got).resolve() == Path(want).resolve():
-                    return f"http://127.0.0.1:{port}"
-        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError,
-                json.JSONDecodeError):
-            continue
+        if _verify_port_owns_board(port, want):
+            return f"http://127.0.0.1:{port}"
     return None
 
 

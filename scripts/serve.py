@@ -42,6 +42,12 @@ TEMPLATE_HTML = SKILL_DIR / "templates" / "board.html"
 TEMPLATE_JSON = SKILL_DIR / "templates" / "board.json"
 REGEN_SCRIPT = SKILL_DIR / "scripts" / "regen_index.py"
 
+# Ensure scripts/ is importable (for `from port_registry import ...`) when
+# launched via absolute path under launchd.
+_scripts_dir = str(Path(__file__).resolve().parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
 _write_lock = threading.Lock()
 _clients_lock = threading.Lock()
 _clients: list[queue.Queue] = []
@@ -914,12 +920,27 @@ def main():
     _load_initial_cache(board_dir)
     httpd = ThreadingHTTPServer((args.host, args.port), BoardHandler)
     url = f"http://{args.host}:{args.port}"
+    # #107 — register port BEFORE serve_forever so card.py / hooks resolve us
+    # O(1) instead of probing 7891-7900. Best-effort; if the registry write
+    # fails the probe path still works.
+    try:
+        from port_registry import write as _registry_write, remove as _registry_remove
+        _registry_write(board_dir, args.port, os.getpid())
+    except Exception as e:  # pragma: no cover — fail open
+        _registry_remove = None
+        print(f"warn: port-registry write failed: {e}", file=sys.stderr)
     print(f"📋 board-steward v4 serving {board_dir} at {url} (SSE on /events)", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nshutting down", file=sys.stderr)
         httpd.shutdown()
+    finally:
+        if _registry_remove is not None:
+            try:
+                _registry_remove(board_dir)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
