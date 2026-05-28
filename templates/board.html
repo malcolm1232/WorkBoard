@@ -921,14 +921,16 @@
   /* Weekend tint to add subtle structure */
   .cal-dow .dow.weekend { color: #b3b9c4; }
   .cal-weeks {
-    display: grid; grid-auto-rows: 1fr;
+    display: grid;
+    /* #110v2: fixed row height (was 1fr auto-stretch). Bounded cells = no
+       bleed when one day is heavy; days scroll internally instead. */
+    grid-auto-rows: 132px;
     overflow-y: auto;
   }
   .cal-week {
     display: grid; grid-template-columns: repeat(7, 1fr);
     position: relative;
     border-bottom: 1px solid var(--card-border);
-    min-height: 96px;
   }
   .cal-week:last-child { border-bottom: 0; }
   .cal-day {
@@ -937,6 +939,10 @@
     position: relative; min-width: 0;
     transition: background .15s;
     cursor: default;
+    /* #110v2: flex column + overflow:hidden so .cal-events can scroll
+       inside this box instead of spilling into the next day. */
+    display: flex; flex-direction: column;
+    overflow: hidden;
   }
   .cal-day:hover { background: rgba(217,119,87,.04); }
   .cal-day.muted { background: rgba(0,0,0,.015); }
@@ -958,11 +964,21 @@
   }
   .cal-day.muted .cal-daynum { color: #cfd2d6; font-weight: 400; }
 
-  /* Compact dots when there are >3 cards — reduces "stuffed" feel */
+  /* #110v2: internal scroll. Shows every card in the day; scroll for the
+     rest. flex:1 + min-height:0 lets it claim the remaining cell height
+     without breaking the flex parent. Thin scrollbar so dense days stay
+     glanceable. */
   .cal-events {
     display: flex; flex-direction: column; gap: 3px;
     margin-top: 2px;
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--card-border) transparent;
   }
+  .cal-events::-webkit-scrollbar { width: 6px; }
+  .cal-events::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 3px; }
+  .cal-events::-webkit-scrollbar-track { background: transparent; }
   .cal-event-chip {
     display: flex; align-items: center; gap: 6px;
     padding: 3px 7px 3px 8px;
@@ -3522,25 +3538,10 @@ function renderCalendar() {
       if (dayCards.length) {
         const eventList = document.createElement('div');
         eventList.className = 'cal-events';
-        // Density-aware: show 4 visible (was 5); +N more chip for the rest
-        const MAX_VISIBLE = 4;
-        dayCards.slice(0, MAX_VISIBLE).forEach(card => {
-          eventList.appendChild(makeCalendarChip(card));
-        });
-        if (dayCards.length > MAX_VISIBLE) {
-          const more = document.createElement('div');
-          more.className = 'cal-more';
-          more.textContent = '+ ' + (dayCards.length - MAX_VISIBLE) + ' more';
-          more.title = 'Click to filter';
-          more.style.cursor = 'pointer';
-          more.onclick = () => {
-            // Quick affordance: open the first hidden card's modal — gives users
-            // a way to drill in without overcrowding the cell.
-            const first = dayCards[MAX_VISIBLE];
-            if (first) openModal(first.id);
-          };
-          eventList.appendChild(more);
-        }
+        // #110v2: render every card; the .cal-events box scrolls internally.
+        // No truncation + no "+N more" affordance — kills the bleed into the
+        // next day's cell and gives the user direct access to every card.
+        dayCards.forEach(card => eventList.appendChild(makeCalendarChip(card)));
         dayEl.appendChild(eventList);
       }
 
