@@ -3724,27 +3724,37 @@ function renderCalendar() {
         // #110v2: render every card; the .cal-events box scrolls internally.
         dayCards.forEach(card => eventList.appendChild(makeCalendarChip(card)));
 
-        // #238 — sticky "+N more" pill at the bottom of the scroll. N
-        // counts chips whose bottom is below the visible region. Decreases
-        // as the user scrolls down; hides at 0.
+        // #238 + #240 — sticky "+N more" pill at the bottom of the scroll.
+        // N = chips whose bottom is below the visible region; ticks down as
+        // you scroll, becomes invisible at 0. Uses visibility:hidden (NOT
+        // display:none) so the slot stays reserved — toggling display caused
+        // a feedback loop: hide → scrollHeight drops → scrollTop clamps →
+        // re-fires scroll → re-shows → flicker.
         if (dayCards.length > 4) {
           const more = document.createElement('div');
           more.className = 'cal-day-more';
+          more.textContent = '+ ' + (dayCards.length - 4) + ' more';
           eventList.appendChild(more);
+          let rafId = 0;
           const recompute = () => {
+            rafId = 0;
             const listBottom = eventList.scrollTop + eventList.clientHeight;
-            // Each chip's offsetTop+offsetHeight is its bottom relative to the
-            // scroll container; the sticky pill is excluded by className.
             let hidden = 0;
             for (const chip of eventList.querySelectorAll('.cal-event-chip')) {
               const bot = chip.offsetTop + chip.offsetHeight;
               if (bot > listBottom + 1) hidden++;
             }
-            if (hidden === 0) more.style.display = 'none';
-            else { more.style.display = ''; more.textContent = '+ ' + hidden + ' more'; }
+            if (hidden === 0) {
+              more.style.visibility = 'hidden';
+            } else {
+              more.style.visibility = '';
+              more.textContent = '+ ' + hidden + ' more';
+            }
           };
-          eventList.addEventListener('scroll', recompute, { passive: true });
-          // initial paint runs after layout: defer one frame
+          // rAF-throttle scroll: at most one recompute per frame, no jitter.
+          eventList.addEventListener('scroll', () => {
+            if (!rafId) rafId = requestAnimationFrame(recompute);
+          }, { passive: true });
           requestAnimationFrame(recompute);
         }
 
