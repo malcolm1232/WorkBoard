@@ -269,6 +269,10 @@ def cmd_add(args, d, board):
     writeup= maybe_stdin(args.writeup, args.writeup_stdin) or ""
 
     now = now_iso()
+    # --created-at override: use the provided ISO ts as createdAt (and doneAt
+    # for cards landing directly in done). updatedAt stays = now since the
+    # card row was actually written now.
+    created = getattr(args, "created_at", None) or now
     card = {
         "num": d["nextNum"],
         "id": cid,
@@ -280,9 +284,9 @@ def cmd_add(args, d, board):
         "origin": origin,
         "notes": notes,
         "writeup": writeup,
-        "createdAt": now,
+        "createdAt": created,
         "updatedAt": now,
-        "doneAt": now if args.column == "done" else None,
+        "doneAt": created if args.column == "done" else None,
         "lastTouchedSubtask": None,
         "linkedCards": [],
         "subtasks": [],
@@ -777,6 +781,9 @@ def build_parser():
     pa.add_argument("--writeup", default=None)
     pa.add_argument("--writeup-stdin", action="store_true")
     pa.add_argument("--link", action="append", default=None, help="ref(s) to link bidirectionally")
+    pa.add_argument("--created-at", default=None,
+                    help="ISO timestamp to override createdAt (default: now). "
+                         "Use when importing historic work so board sorts chronologically.")
     pa.set_defaults(fn=cmd_add)
 
     # update

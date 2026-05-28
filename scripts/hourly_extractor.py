@@ -171,6 +171,52 @@ def extract_cards_for_chunk(chunk: list[tuple[str, list[dict]]],
 
 # ---------- card emission -------------------------------------------------
 
+# ---------- progress banner ----------
+
+def _banner_create(card_py: Path, board: Path, total_chunks: int) -> int | None:
+    """Spawn the live progress banner in the 'notes' column."""
+    args = [sys.executable, str(card_py), "--board", str(board), "add",
+            "--column", "notes", "--priority", "mid",
+            "--code", "EXTRACTION",
+            "--title", f"🔄 extracting 0/{total_chunks} chunks…",
+            "--origin", "Live progress banner from hourly_extractor.py",
+            "--notes", f"chunks done: 0/{total_chunks}  cards emitted: 0",
+            "--tag", "discovered", "--tag", "banner"]
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=8)
+    except subprocess.SubprocessError:
+        return None
+    if out.returncode != 0:
+        return None
+    m = re.search(r"#(\d+)", out.stdout)
+    return int(m.group(1)) if m else None
+
+
+def _banner_update(card_py: Path, board: Path, num: int,
+                   done: int, total: int, cards_so_far: int) -> None:
+    args = [sys.executable, str(card_py), "--board", str(board), "update",
+            str(num),
+            "--title", f"🔄 extracting {done}/{total} chunks…",
+            "--notes", f"chunks done: {done}/{total}  cards emitted: {cards_so_far}"]
+    try:
+        subprocess.run(args, capture_output=True, text=True, timeout=4)
+    except subprocess.SubprocessError:
+        pass
+
+
+def _banner_finish(card_py: Path, board: Path, num: int,
+                   n_cards: int, n_buckets: int, n_chunks: int) -> None:
+    args = [sys.executable, str(card_py), "--board", str(board), "update",
+            str(num),
+            "--title", f"✓ extraction done — {n_cards} cards from {n_buckets} buckets",
+            "--notes", f"emitted {n_cards} card(s) across {n_buckets} bucket(s) "
+                       f"in {n_chunks} chunk(s)"]
+    try:
+        subprocess.run(args, capture_output=True, text=True, timeout=4)
+    except subprocess.SubprocessError:
+        pass
+
+
 def _card_add(card_py: Path, board: Path, card: dict) -> int | None:
     title = (card.get("title") or "").strip()[:80]
     if not title:
@@ -193,6 +239,11 @@ def _card_add(card_py: Path, board: Path, card: dict) -> int | None:
             "--column", column, "--priority", priority,
             "--title", title, "--origin", origin[:400],
             "--tag", "discovered"]
+    # Stamp createdAt with the bucket's actual time so the board sorts
+    # chronologically without an end-pass.
+    bucket_ts = card.get("_bucket_ts_iso")
+    if bucket_ts:
+        args += ["--created-at", bucket_ts]
     if notes:
         args += ["--notes", notes]
     for t in tags:
@@ -338,6 +389,9 @@ def run(project: Path, board: Path, port: int, days: int,
           f"(parallel workers={workers})",
           file=sys.stderr)
 
+    # Progress banner: a single 'notes' card the user can watch update live.
+    banner_num = _banner_create(card_py, board, len(chunks))
+
     from concurrent.futures import ThreadPoolExecutor, as_completed
     n_cards = 0
 
@@ -381,13 +435,26 @@ def run(project: Path, board: Path, port: int, days: int,
             print(f"  [{completed}/{len(chunks)}] [{label_summary}]  "
                   f"→ {len(cards)} card(s) extracted",
                   file=sys.stderr)
+            # Bucket ts for createdAt = first bucket's start (ISO).
+            first_bucket_ts = datetime.fromtimestamp(
+                chunk_keys[0] * bucket_min * 60, tz=timezone.utc).isoformat()
             for card in cards:
                 card["_bucket_label"] = label_summary
+                card["_bucket_ts_iso"] = first_bucket_ts
                 num = emit_card(card_py, board, card,
                                 show_lifecycle, pace_s)
                 if num:
                     n_cards += 1
                 time.sleep(pace_s)
+            # Update the banner after each chunk completes.
+            if banner_num:
+                _banner_update(card_py, board, banner_num,
+                               completed, len(chunks), n_cards)
+
+    # Banner → done at the end.
+    if banner_num:
+        _banner_finish(card_py, board, banner_num, n_cards,
+                       len(sorted_buckets), len(chunks))
 
     print(f"✓ emitted {n_cards} card(s) across {len(sorted_buckets)} bucket(s) "
           f"in {len(chunks)} chunk(s)",
