@@ -32,6 +32,10 @@ PROFILE="software"
 LIFECYCLE=1                         # replay task→ip→done flight at the end
 LIFECYCLE_INTERVAL=2                # seconds between phases
 LEGACY_DISCOVER=0                   # 1 = use old discover.py (session-shaped)
+REPLAY_MODE=""                      # "" = bulk discover (default), "realtime" = turn-paced
+TURNS_PER_SEC=2.0
+GAP_SPEEDUP=""                      # if set, preserve real idle gaps × speedup
+MAX_TURNS=0
 
 # ---- arg parsing -------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -46,6 +50,10 @@ while [[ $# -gt 0 ]]; do
     --no-lifecycle) LIFECYCLE=0; shift ;;
     --lifecycle-interval) LIFECYCLE_INTERVAL="$2"; shift 2 ;;
     --legacy-discover) LEGACY_DISCOVER=1; shift ;;
+    --replay-mode) REPLAY_MODE="$2"; shift 2 ;;
+    --turns-per-sec) TURNS_PER_SEC="$2"; shift 2 ;;
+    --gap-speedup) GAP_SPEEDUP="$2"; shift 2 ;;
+    --max-turns) MAX_TURNS="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,18p' "$0" | sed 's/^# //; s/^#$//'
       exit 0 ;;
@@ -141,8 +149,27 @@ fi
 # manually pointed at the real project, via a one-shot subprocess invocation
 # of card.py (mirroring what _stream_discovered_cards does in serve.py).
 
-echo "▶ discovering real cards from $PROJECT_ABS history"
 export SIM_BOARD_DIR="${SIM_DIR}/board"
+
+# ---- realtime replay branch (turn-paced) ---------------------------------------
+if [[ "$REPLAY_MODE" == "realtime" ]]; then
+  echo "▶ turn-paced realtime replay from $PROJECT_ABS history"
+  REPLAY_ARGS=(--project "$PROJECT_ABS"
+               --board   "${SIM_DIR}/board/board.json"
+               --port    "$PORT"
+               --days    "$DAYS"
+               --turns-per-sec "$TURNS_PER_SEC"
+               --max-turns "$MAX_TURNS")
+  if [[ -n "$GAP_SPEEDUP" ]]; then
+    REPLAY_ARGS+=(--gap-speedup "$GAP_SPEEDUP")
+  fi
+  python3 "${SCRIPT_DIR}/lifecycle_replay.py" "${REPLAY_ARGS[@]}"
+  # skip the bulk-discover block below
+  REALTIME_DONE=1
+fi
+
+if [[ -z "${REALTIME_DONE:-}" ]]; then
+echo "▶ discovering real cards from $PROJECT_ABS history"
 python3 - "$PROJECT_ABS" "$PORT" "$DAYS" "$MAX" "${SCRIPT_DIR}" "${LEGACY_DISCOVER}" <<'PYEOF'
 import sys, subprocess, json, time, urllib.request, urllib.parse
 project, port, days, mx, sdir, legacy = (
@@ -251,6 +278,7 @@ for sess in items:
     # between cards so the next pop-in doesn't overlap the last landing.
     time.sleep(0.15)
 PYEOF
+fi   # end bulk-discover gate (skipped in realtime replay mode)
 
 # ---- lifecycle flight replay -------------------------------------------------
 # Adds one fresh card and walks it task → inprogress → done with sleeps so the

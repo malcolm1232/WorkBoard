@@ -529,6 +529,13 @@ def _attach_context(tasks: list[dict], events: list[dict],
         t["memory_writes"] = []
         t["plan_refs"] = []
         t["git_commits"] = []
+        t["lifecycle"] = {
+            "prompt_ts": t["ts_start"],
+            "first_edit_ts": None,
+            "ship_tss": [],   # in chronological order; first = initial ship
+            "bug_tss": [],    # bug_hits ts (any time after prompt)
+            "commit_tss": [],
+        }
 
     proj_str = str(project.resolve())
     for ev in events:
