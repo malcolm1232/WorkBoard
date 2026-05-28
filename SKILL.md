@@ -169,6 +169,8 @@ This makes the board feel real-time — cards move as work happens, not at sessi
 
 ### E. Per-task lifecycle — the canonical sequence (do this for every task)
 
+> **The per-turn rule.** Every substantive Claude turn that ships, edits, decides, or plans MUST file at least 1 card before the turn ends. **Each turn = 1 card minimum.** A turn may produce N cards when the user names N distinct units of work — e.g., "build phases 1–9" files 9 mandatory cards; a numbered list of N asks files N task cards. `#` is the unit of findability, so no work goes uncarded. Only genuine non-asks (pure question, debug-this-snippet, explain-X) are exempt; see §"When to engage."
+
 When the user gives Claude a substantive task in a board-steward workspace, drive the card through these stages — same sequence the user-drag and SSE simulations animate end-to-end. **No "want me to add a card?" prompt — just do it.**
 
 **Use `fly` for every cross-column hop.** `card.py fly <num> <col>` is the canonical verb — it mutates data AND asserts the animation contract (~320ms `simulateUserDragMove` + 400ms default pause so chained flies don't race the browser). It accepts the same side-effect flags as the legacy verbs: `--bug REASON`, `--improve TEXT`, `--subtask TEXT`, `--note TEXT`, `--writeup STR`. `card.py move` still exists as a data-only fallback when you explicitly *don't* want the chained pause.
@@ -502,7 +504,7 @@ After the stream completes:
 
 ### Default columns on install
 
-The template `board.json` ships with **four** columns only: `ideas`, `backlog`, `inprogress`, `done`. Add other columns (`blocked`, `consideration`, `review`, anything project-specific) on demand via `card.py column add` — and only when there's a real card that needs them. Empty columns are noise.
+The template `board.json` ships with **six** columns in this canonical left-to-right order: `task`, `backlog`, `inprogress`, `done`, `notes`, `mandatory`. `serve.py` runs an idempotent migration on load that appends any missing default cols to existing boards (matched by id OR case-insensitive name, so a hand-named `notes` column isn't duplicated). Add other columns (`blocked`, `consideration`, `review`, `super-urgent`, anything project-specific) on demand via `card.py column add` — and only when there's a real card that needs them. Empty columns are noise.
 
 ---
 

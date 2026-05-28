@@ -63,6 +63,21 @@ CONT_MAX_GAP_S  = 90
 SPLIT_MIN_LEN   = 150
 SPLIT_MIN_GAP_S = 300
 
+# Mandatory keywords — urgency signals route the card to the mandatory col.
+MANDATORY_RE = re.compile(
+    r"\b(must|need to|needs to|gotta|urgent|critical|asap|p0|p1|blocker|"
+    r"required|mandatory|cannot ship without|cant ship without|can't ship without)\b",
+    re.I,
+)
+
+# Multi-card split — detect when one prompt names N distinct units of work.
+# Pattern A: 3+ "Phase N" mentions in the same prompt.
+PHASE_ENUM_RE = re.compile(r"\bphase\s*[0-9]+(?:\.[0-9]+)?\b", re.I)
+# Pattern B: numbered list with 3+ items (1. ... 2. ... 3. ...).
+NUMBERED_LIST_LINE_RE = re.compile(r"^\s*([0-9]+)[.)]\s+(.+)", re.M)
+# Pattern C: bulleted multi-item list with 3+ items.
+BULLET_LIST_LINE_RE = re.compile(r"^\s*[-*]\s+(.+)", re.M)
+
 # ---------- shared types ----------
 # Event = (ts:datetime, source:str, kind:str, text:str, files:list[str], meta:dict)
 # kind ∈ {"user_prompt", "asst_msg", "tool_use", "memory_write", "convo_user",
@@ -291,6 +306,51 @@ def bucket_id(ts: datetime, bucket_min: int) -> int:
     return int(ts.timestamp()) // (bucket_min * 60)
 
 
+_QUOTE_MARKERS = ("❯", "u said", "you said", "ur message", "ur reply",
+                  "ur response", "ur output")
+
+
+def split_into_subtasks(text: str) -> list[str]:
+    """If `text` enumerates N≥3 distinct units of work, return per-unit titles.
+    Otherwise []. Skips when the prompt is quoting Claude back (❯, "u said",
+    etc.) — those lists are references, not asks.
+
+    Patterns (first match wins):
+      A. 3+ 'Phase N' mentions       → one title per phase, in order
+      B. numbered list with ≥3 items → one title per item
+      C. bulleted list with ≥3 items → one title per item
+    """
+    lower = text.lower()
+    for marker in _QUOTE_MARKERS:
+        if marker in lower:
+            return []
+    # Lines starting with '>' are markdown quotes — usually pasted content.
+    quoted_lines = sum(1 for ln in text.splitlines() if ln.lstrip().startswith(">"))
+    if quoted_lines >= 3:
+        return []
+    # A. Phase enumeration
+    phases = PHASE_ENUM_RE.findall(text)
+    if len(phases) >= 3:
+        # Build per-phase titles by walking the text once, capturing the phrase
+        # following each Phase N up to the next Phase N or 120 chars.
+        out: list[str] = []
+        positions = [(m.start(), m.group(0)) for m in PHASE_ENUM_RE.finditer(text)]
+        for i, (pos, label) in enumerate(positions):
+            end = positions[i + 1][0] if i + 1 < len(positions) else min(pos + 120, len(text))
+            body = text[pos:end].strip(" :,-—\n")[:100]
+            out.append(body)
+        return out
+    # B. Numbered list
+    items = NUMBERED_LIST_LINE_RE.findall(text)
+    if len(items) >= 3:
+        return [body.strip()[:100] for _n, body in items]
+    # C. Bulleted list (but not if it looks like a single sentence wrapped)
+    bullets = BULLET_LIST_LINE_RE.findall(text)
+    if len(bullets) >= 3:
+        return [body.strip()[:100] for body in bullets]
+    return []
+
+
 def is_trivial(text: str) -> bool:
     line = text.strip().split("\n", 1)[0]
     if TRIVIAL_RE.match(line):
@@ -369,81 +429,63 @@ def classify_ship(text: str, has_nearby_files: bool) -> str | None:
 
 
 def extract_tasks(events: list[dict], bucket_min: int, project: Path) -> list[dict]:
-    """Heuristic A — walk user_prompt events in time order, merge or split."""
+    """Per-turn rule (post-#210): every substantive user prompt = its own task.
+
+    No continuation-merge. The only prompts that DON'T seed a task are
+    trivial replies (yes/ok/sure, `[Request interrupted by user]`) — those
+    attach to the previous task as a follow-up so they're not silently lost.
+    """
     events.sort(key=lambda e: e["ts"])
-    # Index assistant events by bucket → for files_in_window lookups
-    user_events = [e for e in events
-                   if e["kind"] in ("user_prompt", "convo_user")]
+    # Dedupe prompts across sources — jsonl is canonical, convo is a transcript
+    # of the same prompts. Key by (ts rounded to 60s, first 60 chars of text).
+    user_events_all = [e for e in events
+                       if e["kind"] in ("user_prompt", "convo_user")]
+    # 5-min dedup window absorbs convo file timestamps that only have HH:MM
+    # precision and may drift up to ~1min vs jsonl exact ts.
+    seen_keys: set[str] = set()
+    user_events: list[dict] = []
+    for e in user_events_all:
+        head = (e["text"] or "").strip()[:60].lower()
+        if head in seen_keys:
+            continue
+        seen_keys.add(head)
+        user_events.append(e)
 
     tasks: list[dict] = []
-    active: dict | None = None
-    last_substantive_ts: datetime | None = None
-    last_files: list[str] = []
-    last_text: str = ""
+    active: dict | None = None  # last-seeded task (trivial follow-ups attach here)
 
     for ev in user_events:
         text = ev["text"].strip()
         if not text:
             continue
         trivial = is_trivial(text)
-        gap_s = ((ev["ts"] - last_substantive_ts).total_seconds()
-                 if last_substantive_ts else 1e9)
-        # Look at file edits in ±90s around this prompt — they're "the work
-        # being driven by this prompt".
         prompt_files = files_in_window(events, ev["ts"], window_s=120)
 
-        if active is None:
-            # Don't let a trivial reply seed the first task — wait for
-            # a substantive prompt.
-            if trivial:
-                continue
-            active = _start_task(ev, prompt_files)
-            tasks.append(active)
-            last_substantive_ts = ev["ts"]
-            last_files = prompt_files
-            last_text = text
-            continue
-
-        # Same bucket = same conversation thread. Different bucket = harder
-        # threshold to keep streaming into one task.
-        same_bucket = bucket_id(ev["ts"], bucket_min) == \
-                      bucket_id(active["ts_start"], bucket_min)
-
         if trivial:
-            _merge_into(active, ev, prompt_files)
+            if active is not None:
+                _merge_into(active, ev, prompt_files)
             continue
 
-        if same_bucket and is_continuation(text, last_text, gap_s,
-                                           prompt_files, last_files):
-            _merge_into(active, ev, prompt_files)
-            last_substantive_ts = ev["ts"]
-            last_files = prompt_files
-            last_text = text
+        # Multi-card split: if the prompt enumerates N≥3 phases / list items,
+        # emit one task per item AND a parent task summarizing the ask.
+        subtitles = split_into_subtasks(text)
+        if subtitles:
+            parent = _start_task(ev, prompt_files)
+            parent["children_titles"] = subtitles
+            tasks.append(parent)
+            for sub in subtitles:
+                child_ev = dict(ev)
+                child_ev["text"] = sub
+                child = _start_task(child_ev, prompt_files)
+                child["parent_prompt"] = text[:120]
+                tasks.append(child)
+            active = parent
             continue
 
-        # Force-split conditions met → start new task
-        if should_split(text, last_text, gap_s, prompt_files, last_files):
-            active = _start_task(ev, prompt_files)
-            tasks.append(active)
-            last_substantive_ts = ev["ts"]
-            last_files = prompt_files
-            last_text = text
-            continue
+        # Every substantive prompt is its own card.
+        active = _start_task(ev, prompt_files)
+        tasks.append(active)
 
-        # Default: same bucket → merge, different bucket → split
-        if same_bucket:
-            _merge_into(active, ev, prompt_files)
-            last_substantive_ts = ev["ts"]
-            last_files = prompt_files
-            last_text = text
-        else:
-            active = _start_task(ev, prompt_files)
-            tasks.append(active)
-            last_substantive_ts = ev["ts"]
-            last_files = prompt_files
-            last_text = text
-
-    # Attach context (files, ships, bugs, commits, memory, plans) to tasks.
     _attach_context(tasks, events, bucket_min, project)
     return tasks
 
@@ -537,55 +579,9 @@ def _attach_context(tasks: list[dict], events: list[dict],
             owner["git_commits"].append({"sha": sha, "subj": ev["text"][:120]})
 
 
-# ---------- Pass 2 — soft-boundary reconciliation ----------
-
-def pass2_merge(tasks: list[dict]) -> list[dict]:
-    """Walk task list once. Merge adjacent tasks that share files or have
-    a short follow-up bridge. Idempotent — does one pass."""
-    if len(tasks) < 2:
-        return tasks
-    out: list[dict] = []
-    i = 0
-    while i < len(tasks):
-        cur = tasks[i]
-        if i + 1 >= len(tasks):
-            out.append(cur)
-            break
-        nxt = tasks[i + 1]
-        # Bridge if next is within 1 bucket of current AND shares ≥1 file
-        # OR next user_prompt is short (the explicit "is_continuation" but
-        # across bucket boundary).
-        bridge = False
-        if nxt["bucket_id_start"] - cur["bucket_id_start"] <= 1:
-            cur_files = set(cur.get("files_touched_all") or [])
-            nxt_files = set(nxt.get("files_touched_all") or [])
-            if cur_files & nxt_files:
-                bridge = True
-            if len(nxt["user_prompt"]) < CONT_SHORT_LEN:
-                bridge = True
-        if bridge:
-            # Merge nxt into cur
-            cur["ts_end"] = max(cur["ts_end"], nxt["ts_end"])
-            cur["source_set"] |= nxt["source_set"]
-            cur["follow_up_prompts"].append(nxt["user_prompt"][:300])
-            cur["follow_up_prompts"].extend(nxt["follow_up_prompts"])
-            for f in nxt.get("files_touched_all") or []:
-                if f not in cur["files_touched_all"]:
-                    cur["files_touched_all"].append(f)
-            for f in nxt.get("files_touched_in_proj") or []:
-                if f not in cur["files_touched_in_proj"]:
-                    cur["files_touched_in_proj"].append(f)
-            for k, v in (nxt.get("tool_calls") or {}).items():
-                cur["tool_calls"][k] = cur["tool_calls"].get(k, 0) + v
-            for key in ("ship_hits_clean", "bug_hits", "defer_hits",
-                        "memory_writes", "plan_refs", "git_commits"):
-                cur[key].extend(nxt.get(key) or [])
-            out.append(cur)
-            i += 2
-        else:
-            out.append(cur)
-            i += 1
-    return out
+# Pass 2 file-overlap stitching removed in #210: per-turn rule treats each
+# substantive prompt as its own card. Soft-boundary reconciliation is now
+# the user's job at session-end review, not extraction's.
 
 
 # ---------- project-scope filter ----------
@@ -613,9 +609,27 @@ def task_in_project(t: dict, project: Path) -> bool:
 
 # ---------- output shaping ----------
 
+def _detect_urgency(t: dict) -> list[str]:
+    """Surface any urgency signals in the task's prompts."""
+    hits: list[str] = []
+    for txt in [t.get("user_prompt") or ""] + (t.get("follow_up_prompts") or []):
+        m = MANDATORY_RE.search(txt)
+        if m:
+            hits.append(m.group(0).lower())
+    # de-dup while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for h in hits:
+        if h not in seen:
+            out.append(h)
+            seen.add(h)
+    return out
+
+
 def task_to_record(t: dict, project: Path) -> dict:
     pp = project.resolve()
     src = sorted(t["source_set"])
+    urgency = _detect_urgency(t)
     return {
         "ts_start": t["ts_start"].isoformat(),
         "ts_end": t["ts_end"].isoformat(),
@@ -635,6 +649,9 @@ def task_to_record(t: dict, project: Path) -> dict:
         "plan_refs": t["plan_refs"][:5],
         "git_commits": t["git_commits"][:5],
         "n_user_total": 1 + len(t["follow_up_prompts"]),  # Bug 2 fix
+        "urgency_hits": urgency,
+        "children_titles": t.get("children_titles") or [],
+        "parent_prompt": t.get("parent_prompt"),
         "cwd": (t.get("meta_seed") or {}).get("cwd"),
         "sessionId": (t.get("meta_seed") or {}).get("sessionId"),
     }
@@ -743,7 +760,6 @@ def main():
         print(f"events harvested: {len(events)} {kinds}", file=sys.stderr)
 
     tasks = extract_tasks(events, args.bucket_min, project)
-    tasks = pass2_merge(tasks)
 
     # Project filter (Bug 1: permissive — keep tasks with ANY signal in proj)
     if not args.all_projects:

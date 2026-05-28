@@ -165,8 +165,12 @@ def _task_to_card_args(task: dict) -> list[str] | None:
         age_days = 999
 
     real_ship = (bool(ship) and bool(files_all)) or bool(commits)
+    urgency = task.get("urgency_hits") or []
+
     if real_ship:
         column = "done"
+    elif urgency and not real_ship:
+        column = "mandatory"               # urgency-language → mandatory
     elif defer:
         column = "backlog"
     elif age_days <= 2 and files_all:
@@ -186,6 +190,7 @@ def _task_to_card_args(task: dict) -> list[str] | None:
     if bugs: tags.append("bug")
     if defer: tags.append("deferred")
     if real_ship: tags.append("shipped")
+    if urgency: tags.append("mandatory")
 
     ended = (task.get("ts_end") or "")[:10]
     sid = (task.get("sessionId") or "")[:8]
@@ -653,6 +658,37 @@ class BoardHandler(BaseHTTPRequestHandler):
         }).encode())
 
 
+# Canonical default columns. Used to add missing cols on load so existing
+# boards from older templates gain the new defaults without manual edits.
+_DEFAULT_COLS = [
+    {"id": "task",       "name": "📥 Task",      "kind": "todo",   "stackUnder": None},
+    {"id": "backlog",    "name": "Backlog",      "kind": "todo",   "stackUnder": None},
+    {"id": "inprogress", "name": "In Progress",  "kind": "active", "stackUnder": None},
+    {"id": "done",       "name": "Done",         "kind": "done",   "stackUnder": None},
+    {"id": "notes",      "name": "📝 Notes",     "kind": "intake", "stackUnder": None},
+    {"id": "mandatory",  "name": "📌 MANDATORY", "kind": "todo",   "stackUnder": None},
+]
+
+
+def _migrate_default_cols(state: dict, board_path: Path) -> bool:
+    """Append any default cols missing from the board. Idempotent.
+    Match by id OR case-insensitive name so a user's hand-named "notes"
+    column doesn't get duplicated. Returns True if state changed."""
+    cols = state.get("columns") or []
+    existing_ids = {c.get("id") for c in cols}
+    existing_names = {(c.get("name") or "").lower().strip("📥📝📌🚨💡 ") for c in cols}
+    added = []
+    for d in _DEFAULT_COLS:
+        nm = d["name"].lower().strip("📥📝📌🚨💡 ")
+        if d["id"] in existing_ids or nm in existing_names:
+            continue
+        added.append(d)
+    if not added:
+        return False
+    state.setdefault("columns", []).extend(added)
+    return True
+
+
 def _load_initial_cache(board_dir: Path) -> None:
     global _cached_state
     p = board_dir / "board.json"
@@ -661,6 +697,14 @@ def _load_initial_cache(board_dir: Path) -> None:
             _cached_state = json.loads(p.read_text())
         except Exception:
             _cached_state = None
+            return
+        if _migrate_default_cols(_cached_state, p):
+            try:
+                _cached_state["rev"] = (_cached_state.get("rev") or 0) + 1
+                atomic_write(p, json.dumps(_cached_state, indent=2,
+                                          ensure_ascii=False).encode("utf-8"))
+            except Exception:
+                pass
 
 
 def main():
