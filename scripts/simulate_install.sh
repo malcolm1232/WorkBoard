@@ -36,6 +36,7 @@ REPLAY_MODE=""                      # "" = bulk discover (default), "realtime" =
 HOURLY_MAX_BUCKETS=0                # 0 = all hours in --days window
 HOURLY_SHOW_LIFECYCLE=0             # 1 = play task→ip→done per card
 HOURLY_BUCKET_MIN=60                # bucket size in minutes
+HOURLY_CHUNK_SIZE=1                 # buckets per LLM call (1 = no batching)
 TURNS_PER_SEC=10.0                  # default replay pace — punchy by default
 GAP_SPEEDUP=""                      # if set, preserve real idle gaps × speedup
 MAX_TURNS=0
@@ -62,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --hourly-max-buckets) HOURLY_MAX_BUCKETS="$2"; shift 2 ;;
     --hourly-show-lifecycle) HOURLY_SHOW_LIFECYCLE=1; shift ;;
     --bucket-min) HOURLY_BUCKET_MIN="$2"; shift 2 ;;
+    --chunk-size) HOURLY_CHUNK_SIZE="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,18p' "$0" | sed 's/^# //; s/^#$//'
       exit 0 ;;
@@ -178,6 +180,7 @@ if [[ "$REPLAY_MODE" == "hourly" ]]; then
                --port    "$PORT"
                --days    "$DAYS"
                --bucket-min "$HOURLY_BUCKET_MIN"
+               --chunk-size "$HOURLY_CHUNK_SIZE"
                --max-buckets "$HOURLY_MAX_BUCKETS")
   if [[ "$HOURLY_SHOW_LIFECYCLE" == "1" ]]; then
     HOURLY_ARGS+=(--show-lifecycle)

@@ -114,14 +114,33 @@ def build_digest(bucket_events: list[dict], project: Path) -> str:
 def extract_cards_for_hour(bucket_events: list[dict], project: Path,
                             bucket_label: str,
                             timeout_s: int = 60) -> list[dict]:
-    """Call claude -p on one hour's digest. Returns parsed card list (may be [])."""
-    digest = build_digest(bucket_events, project)
-    if not digest.strip():
+    """Single-bucket extraction (legacy path; --chunk-size 1)."""
+    return extract_cards_for_chunk(
+        [(bucket_label, bucket_events)], project, timeout_s=timeout_s)
+
+
+def extract_cards_for_chunk(chunk: list[tuple[str, list[dict]]],
+                             project: Path,
+                             timeout_s: int = 90) -> list[dict]:
+    """Multi-bucket extraction. chunk = [(bucket_label, events), ...] in time
+    order. Builds a combined digest with bucket headers, sends ONE LLM call,
+    returns a flat card array. Pays the claude -p cold-start once per chunk
+    instead of per bucket."""
+    sections: list[str] = []
+    for label, bevents in chunk:
+        digest = build_digest(bevents, project)
+        if not digest.strip():
+            continue
+        sections.append(f"=== BUCKET {label} ===\n{digest}")
+    if not sections:
         return []
+    combined = "\n\n".join(sections)
     full = (
         f"{_LLM_PROMPT}\n\n"
-        f"--- HOUR DIGEST ({bucket_label}, project={project.name}) ---\n{digest}\n"
+        f"--- WORK ACTIVITY ({len(chunk)} bucket(s), project={project.name}) ---\n"
+        f"{combined}\n"
     )
+    label_summary = " + ".join(label for label, _ in chunk)
     try:
         proc = subprocess.run(
             [_CLAUDE_BIN, "-p", "--output-format", "text",
@@ -129,10 +148,11 @@ def extract_cards_for_hour(bucket_events: list[dict], project: Path,
             input=full, capture_output=True, text=True, timeout=timeout_s,
         )
     except (FileNotFoundError, subprocess.SubprocessError) as e:
-        print(f"  ! LLM call failed for {bucket_label}: {e}", file=sys.stderr)
+        print(f"  ! LLM call failed for chunk [{label_summary}]: {e}",
+              file=sys.stderr)
         return []
     if proc.returncode != 0:
-        print(f"  ! claude -p exit {proc.returncode} for {bucket_label}",
+        print(f"  ! claude -p exit {proc.returncode} for chunk [{label_summary}]",
               file=sys.stderr)
         return []
     out = (proc.stdout or "").strip()
@@ -144,7 +164,7 @@ def extract_cards_for_hour(bucket_events: list[dict], project: Path,
             return []
         return cards
     except json.JSONDecodeError:
-        print(f"  ! LLM returned non-JSON for {bucket_label}",
+        print(f"  ! LLM returned non-JSON for chunk [{label_summary}]",
               file=sys.stderr)
         return []
 
@@ -271,7 +291,7 @@ def _cwd_in_project(event: dict, project: Path) -> bool:
 def run(project: Path, board: Path, port: int, days: int,
         show_lifecycle: bool, pace_s: float,
         max_buckets: int, workers: int = 4,
-        bucket_min: int = 60) -> None:
+        bucket_min: int = 60, chunk_size: int = 1) -> None:
     events = _flatten_events(project, days)
     if not events:
         print("no events to extract", file=sys.stderr)
@@ -293,61 +313,53 @@ def run(project: Path, board: Path, port: int, days: int,
     if max_buckets:
         sorted_buckets = sorted_buckets[-max_buckets:]   # most-recent N hours
 
+    # Group sorted_buckets into chunks of chunk_size for batched LLM calls.
+    chunks: list[list[int]] = []
+    for i in range(0, len(sorted_buckets), chunk_size):
+        chunks.append(sorted_buckets[i:i + chunk_size])
+
     print(f"▶ hourly extraction: {len(sorted_buckets)} bucket(s) of {len(events)} events "
+          f"→ {len(chunks)} chunk(s) of ≤{chunk_size} bucket(s) "
           f"(parallel workers={workers})",
           file=sys.stderr)
 
-    # Fire all LLM extractions in parallel; emit cards in chronological order
-    # as each bucket's result arrives.
-    from concurrent.futures import ThreadPoolExecutor
-
-    results: dict[int, list[dict]] = {}   # bucket_key → cards
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     n_cards = 0
 
-    def _do_bucket(bucket_key: int) -> tuple[int, list[dict]]:
-        bevents = buckets[bucket_key]
-        label = _bucket_label(bucket_key, bucket_min)
-        return bucket_key, extract_cards_for_hour(bevents, project, label)
+    def _do_chunk(chunk_keys: list[int]) -> tuple[list[int], list[dict]]:
+        chunk = [(_bucket_label(k, bucket_min), buckets[k])
+                 for k in chunk_keys]
+        cards = extract_cards_for_chunk(chunk, project)
+        return chunk_keys, cards
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        # Submit all jobs.
-        futures = {pool.submit(_do_bucket, b): b for b in sorted_buckets}
+        futures = {pool.submit(_do_chunk, c): c for c in chunks}
         completed = 0
-        next_to_emit = 0   # index into sorted_buckets
-
-        # As futures complete, stash results; whenever the chronologically-
-        # next bucket is ready, drain it (and any contiguous followers) into
-        # the board so the UI fills in real-time-ish.
-        from concurrent.futures import as_completed
+        # Emit cards as chunks finish (no chronological ordering — per user
+        # 5/28: 'dont worry about rearranging, we can arrange by time later').
         for fut in as_completed(futures):
             try:
-                key, cards = fut.result()
+                chunk_keys, cards = fut.result()
             except Exception as e:
-                key = futures[fut]
+                chunk_keys = futures[fut]
                 cards = []
-                print(f"  ! bucket {_bucket_label(key, bucket_min)} extraction error: {e}",
-                      file=sys.stderr)
-            results[key] = cards
+                print(f"  ! chunk error: {e}", file=sys.stderr)
             completed += 1
-            print(f"  [{completed}/{len(sorted_buckets)}] {_bucket_label(key, bucket_min)}  "
+            label_summary = " + ".join(_bucket_label(k, bucket_min)
+                                       for k in chunk_keys)
+            print(f"  [{completed}/{len(chunks)}] [{label_summary}]  "
                   f"→ {len(cards)} card(s) extracted",
                   file=sys.stderr)
+            for card in cards:
+                card["_bucket_label"] = label_summary
+                num = emit_card(card_py, board, card,
+                                show_lifecycle, pace_s)
+                if num:
+                    n_cards += 1
+                time.sleep(pace_s)
 
-            # Drain contiguous ready buckets in chronological order.
-            while (next_to_emit < len(sorted_buckets)
-                   and sorted_buckets[next_to_emit] in results):
-                emit_key = sorted_buckets[next_to_emit]
-                label = _bucket_label(emit_key, bucket_min)
-                for card in results[emit_key]:
-                    card["_bucket_label"] = label
-                    num = emit_card(card_py, board, card,
-                                    show_lifecycle, pace_s)
-                    if num:
-                        n_cards += 1
-                    time.sleep(pace_s)
-                next_to_emit += 1
-
-    print(f"✓ emitted {n_cards} card(s) across {len(sorted_buckets)} hour(s)",
+    print(f"✓ emitted {n_cards} card(s) across {len(sorted_buckets)} bucket(s) "
+          f"in {len(chunks)} chunk(s)",
           file=sys.stderr)
 
 
@@ -367,11 +379,15 @@ def main():
                     help="parallel LLM workers (default 4)")
     ap.add_argument("--bucket-min", type=int, default=60,
                     help="bucket size in minutes (default 60)")
+    ap.add_argument("--chunk-size", type=int, default=1,
+                    help="buckets per LLM call (default 1 = no batching; "
+                         "set 2-4 to amortize claude -p cold-start)")
     args = ap.parse_args()
     os.environ["BOARD_SERVER"] = f"http://127.0.0.1:{args.port}"
     run(args.project.resolve(), args.board.resolve(), args.port,
         args.days, args.show_lifecycle, args.pace, args.max_buckets,
-        workers=args.workers, bucket_min=args.bucket_min)
+        workers=args.workers, bucket_min=args.bucket_min,
+        chunk_size=args.chunk_size)
 
 
 if __name__ == "__main__":
