@@ -420,6 +420,49 @@ def _stream_discovered_cards(project_root: Path, board_dir: Path,
           file=sys.stderr)
 
 
+def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
+                          days: int, bucket_min: int = 30,
+                          chunk_size: int = 2) -> None:
+    """Background-thread worker: the HIGH-COMPUTE startup fill (card #265/#268).
+
+    Runs hourly_extractor.py over the project's full history — multi-source
+    harvest (jsonl + auto-memory + convo dumps + plans + git) bucketed by
+    `bucket_min`, one `claude -p haiku` call per `chunk_size` buckets — and
+    flies each resulting WORK-UNIT card task→inprogress→done. This is the
+    quality path the user chose as the install/startup behaviour, replacing the
+    cheap discover2 'plop'. Compute-heavy by design (#264 tracks a light rework).
+
+    Needs the `claude` CLI on PATH; if extraction can't run, the board simply
+    stays empty (a genuine new user with no history sees an empty board)."""
+    script_dir = Path(__file__).resolve().parent
+    extractor = script_dir / "hourly_extractor.py"
+    if not extractor.exists():
+        # Fall back to the cheap discover path rather than leaving it blank.
+        _stream_discovered_cards(project_root, board_dir, port, days, 20)
+        return
+
+    for _ in range(20):
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.3).read()
+            break
+        except Exception:
+            time.sleep(0.2)
+
+    cmd = [sys.executable, str(extractor),
+           "--project", str(project_root),
+           "--board", str(board_dir / "board.json"),
+           "--port", str(port),
+           "--days", str(days),
+           "--bucket-min", str(bucket_min),
+           "--chunk-size", str(chunk_size),
+           "--show-lifecycle"]
+    try:
+        subprocess.run(cmd, timeout=1800)
+    except Exception as e:
+        print(f"hourly bootstrap fill failed: {e}", file=sys.stderr)
+
+
 def atomic_write(path: Path, data: bytes) -> None:
     # Cross-process lock (3.5a): a `card.py` invoked from a shell that can't
     # reach this server writes the same file directly; the lock keeps the two
@@ -978,9 +1021,17 @@ def main():
     ap.add_argument("--discover-days", type=int, default=7,
                     help="Discover sessions touched in the last N days (default 7)")
     ap.add_argument("--discover-max", type=int, default=20,
-                    help="Cap how many tasks become cards on bootstrap (default 20)")
+                    help="Cap how many tasks become cards on bootstrap (default 20, discover mode only)")
+    ap.add_argument("--bootstrap-mode", choices=["hourly", "discover"], default="hourly",
+                    help="How bootstrap fills the board: 'hourly' (default) = high-compute "
+                         "hourly_extractor (Haiku-per-bucket, flying quality cards); "
+                         "'discover' = cheap discover2 plop (no API key)")
+    ap.add_argument("--bucket-min", type=int, default=30,
+                    help="hourly bootstrap: minutes per bucket (default 30)")
+    ap.add_argument("--chunk-size", type=int, default=2,
+                    help="hourly bootstrap: buckets per Haiku call (default 2)")
     ap.add_argument("--legacy-discover", action="store_true",
-                    help="Use the older discover.py (session-shaped) instead of discover2.py (task-shaped)")
+                    help="Use the older discover.py (session-shaped) instead of discover2.py (task-shaped); forces discover mode")
     ap.add_argument("--install-hooks", action="store_true",
                     help="Wire UserPromptSubmit hook into Claude Code settings.json, then exit")
     ap.add_argument("--uninstall-hooks", action="store_true",
@@ -1018,14 +1069,29 @@ def main():
                 # Stream cards from prior Claude sessions in a background
                 # thread so the user watches their history fill in. Opt out
                 # with --no-discover for a genuine empty start.
+                #
+                # Two fill modes:
+                #   hourly  (default) — HIGH-COMPUTE: hourly_extractor multi-source
+                #                       harvest + Haiku-per-bucket + flying quality
+                #                       cards (the chosen startup behaviour, #268).
+                #   discover          — cheap discover2 'plop' (no API key needed).
                 if not args.no_discover:
-                    threading.Thread(
-                        target=_stream_discovered_cards,
-                        args=(start, board_dir, args.port,
-                              args.discover_days, args.discover_max,
-                              0.25, args.legacy_discover),
-                        daemon=True,
-                    ).start()
+                    if args.bootstrap_mode == "hourly" and not args.legacy_discover:
+                        threading.Thread(
+                            target=_stream_hourly_cards,
+                            args=(start, board_dir, args.port,
+                                  args.discover_days, args.bucket_min,
+                                  args.chunk_size),
+                            daemon=True,
+                        ).start()
+                    else:
+                        threading.Thread(
+                            target=_stream_discovered_cards,
+                            args=(start, board_dir, args.port,
+                                  args.discover_days, args.discover_max,
+                                  0.25, args.legacy_discover),
+                            daemon=True,
+                        ).start()
                 # Nudge first-time installers toward wiring the hook so the
                 # board doesn't silently drift during long active-coding
                 # sessions (root cause of card #84).

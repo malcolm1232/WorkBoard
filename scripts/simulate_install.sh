@@ -43,7 +43,7 @@ LEGACY_DISCOVER=0                   # 1 = use old discover.py (session-shaped)
 REPLAY_MODE="hourly"                # "hourly" = LLM-per-bucket fly (canonical demo, #264) · "bulk" = no-API discover fallback
 HOURLY_MAX_BUCKETS=0                # 0 = all hours in --days window
 HOURLY_SHOW_LIFECYCLE=1             # 1 = play task→ip→done per card (the fly)
-HOURLY_BUCKET_MIN=60                # bucket size in minutes
+HOURLY_BUCKET_MIN=30                # bucket size in minutes
 HOURLY_CHUNK_SIZE=2                 # buckets per LLM call (the #217/#218 demo config)
 HOURLY_DATE=""                      # YYYY-MM-DD UTC pin (empty = no pin)
 
