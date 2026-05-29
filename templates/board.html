@@ -2033,6 +2033,14 @@ function commitCardDrag() {
   card.updatedAt = now();
   if (targetCol === 'done' && !card.doneAt) card.doneAt = card.updatedAt;
   if (targetCol !== 'done') card.doneAt = null;
+  // #254 — active-work follows a live MOVE into In Progress (persisted via the
+  // scheduleSave() below, so it survives refresh). Parked cards never light up.
+  if (targetCol === 'inprogress' && _cardDrag.srcCol !== 'inprogress') {
+    state.activeWorkId = card.id;
+  } else if (_cardDrag.srcCol === 'inprogress' && targetCol !== 'inprogress'
+             && state.activeWorkId === card.id) {
+    state.activeWorkId = null;
+  }
   // Auto-strip the 'bug' tag on done — regression is fixed. Remove the
   // .is-bug class inline so the 🐞 + border vanish the moment the card
   // lands, no SSE round-trip lag.
@@ -2081,6 +2089,7 @@ function commitCardDrag() {
   scheduleSave();
   refreshColumnCount(targetCol);
   if (srcCol && srcCol !== targetCol) refreshColumnCount(srcCol);
+  refreshActiveWork();   // #254 — repaint pulse (this path skips render())
 }
 
 function cancelCardDrag() {
@@ -2817,10 +2826,14 @@ function renderModal(card) {
     colSel.appendChild(opt);
   });
   colSel.onchange = () => {
+    const fromCol = card.column;
     card.column = colSel.value;
     card.updatedAt = now();
     if (card.column === 'done' && !card.doneAt) card.doneAt = card.updatedAt;
     if (card.column !== 'done') card.doneAt = null;
+    // #254 — active-work follows a live move into In Progress (persisted).
+    if (card.column === 'inprogress' && fromCol !== 'inprogress') state.activeWorkId = card.id;
+    else if (fromCol === 'inprogress' && card.column !== 'inprogress' && state.activeWorkId === card.id) state.activeWorkId = null;
     scheduleSave(); render();
   };
   meta.appendChild(colSel);
@@ -4594,17 +4607,16 @@ function refreshColumnCount(colId) {
 // refresh AND any full/partial re-render — the two ways the old v4 logic
 // silently lost the pulse. No connection or timer: it's a CSS class toggled
 // from state, recomputed after every render() and SSE mutation.
-// The ONE "current work" card: most-recently-touched card in In Progress.
-// Shared by the pulse (refreshActiveWork) and the top-pin in render() so both
-// agree on the same card. updatedAt is ISO-8601, so string compare = time order.
+// #254 — the active-work card = the one most recently MOVED INTO In Progress
+// (a live transition), persisted as state.activeWorkId in board.json so the
+// pulse + top-pin survive refresh. Cards merely PARKED in In Progress (e.g.
+// #83, which was never transitioned in this scheme) are NOT active and stay
+// quiet — this is the old live-transition definition, just made persistent.
+// Guard: if the stored id isn't in In Progress anymore, nothing is active.
 function activeWorkId() {
-  if (!state) return null;
-  const inProg = state.cards.filter(c => c.column === 'inprogress');
-  const active = inProg.reduce(
-    (a, b) => (a && (a.updatedAt || '') >= (b.updatedAt || '') ? a : b),
-    null
-  );
-  return active ? active.id : null;
+  if (!state || !state.activeWorkId) return null;
+  const c = state.cards.find(x => x.id === state.activeWorkId);
+  return (c && c.column === 'inprogress') ? c.id : null;
 }
 
 function refreshActiveWork() {
@@ -4619,9 +4631,19 @@ function refreshActiveWork() {
   }
 }
 
-// Back-compat shim: existing callers fire on a live move-in/out. The pulse is
-// now derived from state, so the from/to args are advisory — we just recompute.
-function applyActiveWorkTransition(_cardId, _fromCol, _toCol) {
+// Live transition handler — set/clear the persisted active-work id on a real
+// move in/out of In Progress, then repaint. Does NOT save: whichever writer
+// triggered the move (card.py, or the UI drop/modal handlers) persists
+// state.activeWorkId. This keeps the client's in-memory state correct for
+// SSE-driven moves where the board-level field wouldn't otherwise propagate.
+function applyActiveWorkTransition(cardId, fromCol, toCol) {
+  if (!state) return;
+  if (toCol === 'inprogress' && fromCol !== 'inprogress') {
+    state.activeWorkId = cardId;
+  } else if (fromCol === 'inprogress' && toCol !== 'inprogress'
+             && state.activeWorkId === cardId) {
+    state.activeWorkId = null;
+  }
   refreshActiveWork();
 }
 
