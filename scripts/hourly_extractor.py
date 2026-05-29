@@ -44,11 +44,11 @@ Your job: identify the DISCRETE UNITS OF WORK that happened in each bucket. Each
 Output: a JSON ARRAY of card objects. Each card:
 {
   "title": "verb + noun phrase, ≤70 chars. CLEAN — do NOT prefix with the code (the code renders as its own badge). Examples: 'Atomic-hop primitive for card moves', 'Fix card-drag freeze on iPhone', 'Investigate convo dedup'. NO conversational openers (btw, can u, oh wait). NO verbatim user wording — summarize the WORK.",
-  "code": "short CAPS badge from the noun cluster, ≤24 chars (e.g. 'BOARD-FLY', 'DISCOVER2', 'SIM-60D'). Give one to EVERY card that names a concrete feature/system/fix — it renders as a colored badge and is how work is referenced. Only leave empty for a pure observation/note with no nameable subject.",
+  "code": "short CAPS badge from the noun cluster, ≤24 chars (e.g. 'BOARD-FLY', 'DISCOVER2', 'SIM-60D'). Assign one ONLY when the work has a distinct, reusable NAMED subject — a feature, system, or named fix you'd reference again (roughly half of cards earn one). Leave it EMPTY for routine one-off fixes, chores, tweaks, investigations, or observations with no nameable subject. A code means 'this is a thing with a name', not 'something happened'.",
   "column": "one of: task | backlog | inprogress | done | mandatory | notes",
   "priority": "low | mid | critical",
   "origin": "WHY this work exists — the user's goal or the trigger, in their voice/intent (not yours). ≤200 chars. e.g. 'User wanted card-drag to work on iPhone where the columns stack vertically and the old handler froze.' This is the 'why this exists' a teammate reads to understand the card at a glance. Empty string only if genuinely unknowable.",
-  "notes": "What the work actually was: problem → approach → outcome (or current state). 1-3 sentences, ≤300 chars. Concrete — name the file/function/command/commit if present in the log. For UNFINISHED work, state what's left. Empty string only if no signal.",
+  "notes": "What the work actually was: problem → approach → outcome (or current state). 1-3 sentences, ≤300 chars. Concrete — name the file/function/command. If a COMMIT line (a sha) for this work appears in the bucket log, ALWAYS cite its short sha, e.g. 'Shipped in 7b565ff.' For UNFINISHED work, state what's left. Empty string only if no signal.",
   "tags": ["one or two from: feature | bug | fix | refactor | doc | design | discipline | infrastructure"]
 }
 
