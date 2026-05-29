@@ -904,8 +904,18 @@ def main():
         tasks = [t for t in tasks if task_in_project(t, project)]
 
     tasks.sort(key=lambda t: t["ts_start"], reverse=True)
+    total_found = len(tasks)
     tasks = tasks[: args.max_tasks]
     tasks.sort(key=lambda t: t["ts_start"])  # chronological for streaming
+
+    # No silent caps (VISION §4): if we dropped tasks, SAY so — on stderr and in
+    # the JSON — so the board never reads as "covered everything" when it didn't.
+    dropped = total_found - len(tasks)
+    if dropped > 0:
+        print(f"⚠ harvested {len(tasks)} of {total_found} task(s) in the last "
+              f"{args.days}d; {dropped} older one(s) not shown — re-run with "
+              f"--max-tasks {total_found} or a larger --days to include them.",
+              file=sys.stderr)
 
     out = {
         "project": str(project),
@@ -913,6 +923,8 @@ def main():
         "bucketMin": args.bucket_min,
         "convoDir": str(convo_dir) if convo_dir else None,
         "taskCount": len(tasks),
+        "tasksFound": total_found,
+        "tasksDropped": dropped,
         "tasks": [task_to_record(t, project) for t in tasks],
     }
     json.dump(out, sys.stdout, indent=2, ensure_ascii=False, default=str)
