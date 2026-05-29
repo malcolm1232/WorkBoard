@@ -416,6 +416,7 @@ Live at `~/.agents/skills/board-steward/scripts/`:
 | `discover.py` | **v4: mine `~/.claude/projects/*/sessions/*.jsonl`** for card material — first/last prompts, files edited, ship/defer hints. Used on first install to bootstrap the board from the user's actual history. | `python3 discover.py [--project DIR] [--days 14] [--memory]` |
 | `regen_index.py` | Rebuild `index.json` from `board.json` | `python3 regen_index.py <path>/board.json` |
 | `archive_done.py` | Sweep Done >14d → `archive/board-YYYY-MM.json` | `python3 archive_done.py <path>/board.json [--days 14] [--dry-run]` |
+| `install_autostart.py` | **Cross-platform autostart dispatcher** (#103) — detects `sys.platform`, delegates to launchd / systemd / Task Scheduler. The one command the install recipe points at. | `python3 install_autostart.py [--project DIR] [--port 7891] [--status] [--uninstall] [--dry-run]` |
 
 All stdlib-only, project-agnostic, idempotent. `serve.py` walks up from `--project` (or cwd) looking for `board/board.json` and serves whatever it finds; the server also auto-regens `index.json` after every browser `POST`.
 
@@ -451,6 +452,29 @@ The installer is **safe**:
 - Resolves the hook script path via `__file__` — no hardcoded `/Users/*`, works for any install location
 - Detects existing entries by command-path match — re-running is a no-op
 - Preserves all other settings (`enabledPlugins`, `effortLevel`, etc.) unchanged
+
+---
+
+## Autostart install (cross-platform · #103)
+
+So the board is live at `http://127.0.0.1:7891` on every login with **zero user action** (VISION §3 "startup is instant and invisible"), one dispatcher wires the OS-native autostart mechanism:
+
+```bash
+python3 scripts/install_autostart.py --project <dir> --port 7891   # install
+python3 scripts/install_autostart.py --status                      # verify
+python3 scripts/install_autostart.py --uninstall                   # reverse
+python3 scripts/install_autostart.py --dry-run                     # preview the unit, write nothing (any OS)
+```
+
+`install_autostart.py` reads `sys.platform` and delegates — the recipe above is **identical on every OS**:
+
+| Platform | Installer | Mechanism |
+|---|---|---|
+| macOS (`darwin`) | `install_launchd.py` | launchd LaunchAgent (`RunAtLoad` + `KeepAlive`) |
+| Linux | `install_systemd.py` | `systemd --user` service (`Restart=always`; suggests `loginctl enable-linger`) |
+| Windows (`win32`) | `install_taskscheduler.py` | Task Scheduler `ONLOGON` task running `pythonw.exe` (no console window) |
+
+All three honor the same flags (`--project / --port / --status / --uninstall / --dry-run`), run **unprivileged** in the user's own context (no sudo/admin, no root daemon — matching the "user owns their machine" principle), back up any existing unit before overwrite, and refuse a real install on the wrong OS with a message pointing at the correct installer (`--dry-run` still previews on any OS).
 
 ---
 
