@@ -48,6 +48,7 @@ Plus the end-to-end wrappers:
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime
 import difflib
 import json
@@ -1220,6 +1221,142 @@ def cmd_recover(args, d, board):
           f"Pre-restore state (rev {cur_rev}) remains in .backups.")
 
 
+# ===== schema migrations (3.5d) =====
+# Bump SCHEMA_VERSION and append a migration whenever the card/board shape gains
+# a field. Each migration MUST be idempotent (only fill what's missing) so it's
+# safe to re-run and safe to apply to a board imported from an older version
+# (e.g. a discover-bootstrapped board missing newer fields).
+SCHEMA_VERSION = 2
+
+# Canonical per-card fields → default factory/value (callable = fresh instance).
+_CARD_DEFAULTS = {
+    "code": "", "tags": list, "origin": "", "notes": "", "writeup": "",
+    "linkedCards": list, "subtasks": list, "doneAt": None,
+    "lastTouchedSubtask": None,
+}
+
+
+def _migrate_v1_card_fields(d):
+    """v1 — backfill canonical per-card fields + cross-fill timestamps."""
+    changed = 0
+    for c in d.get("cards", []):
+        for k, v in _CARD_DEFAULTS.items():
+            if k not in c:
+                c[k] = v() if callable(v) else v
+                changed += 1
+        if "updatedAt" not in c and c.get("createdAt"):
+            c["updatedAt"] = c["createdAt"]; changed += 1
+        if "createdAt" not in c and c.get("updatedAt"):
+            c["createdAt"] = c["updatedAt"]; changed += 1
+    return changed
+
+
+def _migrate_v2_board_fields(d):
+    """v2 — backfill board-level fields (columns, cards, nextNum)."""
+    changed = 0
+    if "columns" not in d: d["columns"] = []; changed += 1
+    if "cards" not in d: d["cards"] = []; changed += 1
+    if "nextNum" not in d:
+        d["nextNum"] = max((c.get("num", 0) for c in d.get("cards", [])), default=0) + 1
+        changed += 1
+    return changed
+
+
+MIGRATIONS = [
+    (1, "backfill canonical per-card fields", _migrate_v1_card_fields),
+    (2, "backfill board-level fields (columns, cards, nextNum)", _migrate_v2_board_fields),
+]
+
+
+def cmd_migrate(args, d, board):
+    """3.5d — apply idempotent schemaVersion migrations. Dry-run by default."""
+    cur = d.get("schemaVersion", 0)
+    pending = [(v, name, fn) for v, name, fn in MIGRATIONS if v > cur]
+    if not pending:
+        print(f"schema up to date (schemaVersion {cur}, latest {SCHEMA_VERSION}) — nothing to migrate")
+        return
+
+    if not getattr(args, "apply", False):
+        print(f"DRY-RUN: schemaVersion {cur} → {SCHEMA_VERSION}, {len(pending)} migration(s) pending:")
+        probe = copy.deepcopy(d)
+        for v, name, fn in pending:
+            n = fn(probe)  # mutates the throwaway copy only
+            print(f"  v{v}  {name}  ({n} field(s) would change)")
+        print("Re-run with --apply to write. Current state stays in .backups, so it's reversible.")
+        return
+
+    total = 0
+    for v, name, fn in pending:
+        n = fn(d)
+        total += n
+        print(f"  v{v}  {name}  ({n} field(s) changed)")
+    d["schemaVersion"] = SCHEMA_VERSION
+    rev = atomic_save(board, d)
+    print(f"✓ migrated to schemaVersion {SCHEMA_VERSION} ({total} field(s) backfilled) (rev {rev})")
+
+
+def cmd_repair_links(args, d, board):
+    """3.5e — walk linkedCards and fix integrity: drop dangling (target gone),
+    self, and duplicate ids; restore reciprocity for one-sided links (links are
+    bidirectional by design). Dry-run by default; idempotent on re-run."""
+    cards = d.get("cards", [])
+    by_id = {c["id"]: c for c in cards if "id" in c}
+
+    dangling = []   # (num, bad_id)
+    selflinks = []  # (num,)
+    dupes = []      # (num, dup_id)
+    onesided = []   # (num, other_id) — other exists but doesn't link back
+    for c in cards:
+        seen = set()
+        for oid in (c.get("linkedCards") or []):
+            if oid == c.get("id"):
+                selflinks.append((c.get("num"),)); continue
+            if oid in seen:
+                dupes.append((c.get("num"), oid)); continue
+            seen.add(oid)
+            if oid not in by_id:
+                dangling.append((c.get("num"), oid)); continue
+            if c.get("id") not in (by_id[oid].get("linkedCards") or []):
+                onesided.append((c.get("num"), oid))
+
+    total = len(dangling) + len(selflinks) + len(dupes) + len(onesided)
+    if total == 0:
+        print("links healthy — nothing to repair")
+        return
+
+    def _num(oid):
+        return f"#{by_id[oid]['num']}" if oid in by_id else f"{oid}(gone)"
+
+    print(f"{total} link issue(s) found:")
+    for num, oid in dangling:  print(f"  drop dangling   #{num} → {oid} (no such card)")
+    for (num,) in selflinks:   print(f"  drop self-link  #{num} → itself")
+    for num, oid in dupes:     print(f"  drop duplicate  #{num} → {_num(oid)}")
+    for num, oid in onesided:  print(f"  add reciprocal  {_num(oid)} → #{num} (currently one-sided)")
+
+    if not getattr(args, "apply", False):
+        print("\nRe-run with --apply to fix. Current state stays in .backups, so it's reversible.")
+        return
+
+    # 1) Clean each list: drop self/dangling/dupes, preserve order.
+    for c in cards:
+        seen, cleaned = set(), []
+        for oid in (c.get("linkedCards") or []):
+            if oid == c.get("id") or oid not in by_id or oid in seen:
+                continue
+            seen.add(oid); cleaned.append(oid)
+        c["linkedCards"] = cleaned
+    # 2) Restore reciprocity for every surviving link.
+    recip = 0
+    for c in cards:
+        for oid in c["linkedCards"]:
+            ol = by_id[oid].setdefault("linkedCards", [])
+            if c["id"] not in ol:
+                ol.append(c["id"]); recip += 1
+    rev = atomic_save(board, d)
+    print(f"✓ repaired: {len(dangling)} dangling, {len(selflinks)} self, "
+          f"{len(dupes)} dupe dropped; {recip} reciprocal(s) added (rev {rev})")
+
+
 # ===== prelaunch gate (#91) =====
 # Cards in launch-blocking columns/priorities that aren't shipped or blocked.
 # Surface these before any public-facing ship: github-repo flip private→public,
@@ -1437,6 +1574,18 @@ def build_parser():
     prc.add_argument("--apply", action="store_true",
                      help="actually write the restore (default: dry-run)")
     prc.set_defaults(fn=cmd_recover)
+
+    # migrate (3.5d) — apply idempotent schemaVersion migrations
+    pmg = sub.add_parser("migrate", help="apply schemaVersion migrations (3.5d)")
+    pmg.add_argument("--apply", action="store_true",
+                     help="actually run the migrations (default: dry-run)")
+    pmg.set_defaults(fn=cmd_migrate)
+
+    # repair-links (3.5e) — fix dangling/self/dupe/one-sided linkedCards
+    prl = sub.add_parser("repair-links", help="fix linkedCards integrity (3.5e)")
+    prl.add_argument("--apply", action="store_true",
+                     help="actually apply the fixes (default: dry-run)")
+    prl.set_defaults(fn=cmd_repair_links)
 
     pbug = sub.add_parser("bug", help="reopen a Done card as a bug (Done → In Progress + 'bug' tag + 🐞 fix-bug subtask)")
     pbug.add_argument("ref", help="card num or id")
