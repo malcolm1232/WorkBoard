@@ -47,7 +47,8 @@ Output: a JSON ARRAY of card objects. Each card:
   "code": "short kebab or CAPS code from noun cluster, ≤24 chars (e.g. 'BOARD-FLY', 'DISCOVER2'). Empty string if not a build/feature card.",
   "column": "one of: task | backlog | inprogress | done | mandatory | notes",
   "priority": "low | mid | critical",
-  "notes": "~2 sentences problem statement + fix direction or context. ≤200 chars. Empty string if no signal.",
+  "origin": "WHY this work exists — the user's goal or the trigger, in their voice/intent (not yours). ≤200 chars. e.g. 'User wanted card-drag to work on iPhone where the columns stack vertically and the old handler froze.' This is the 'why this exists' a teammate reads to understand the card at a glance. Empty string only if genuinely unknowable.",
+  "notes": "What the work actually was: problem → approach → outcome (or current state). 1-3 sentences, ≤300 chars. Concrete — name the file/function/command/commit if present in the log. For UNFINISHED work, state what's left. Empty string only if no signal.",
   "tags": ["one or two from: feature | bug | fix | refactor | doc | design | discipline | infrastructure"]
 }
 
@@ -56,13 +57,18 @@ Column routing rules:
 - "mandatory"  → user said urgent / must / impt / critical / asap / blocker / 'this is impt'
 - "inprogress" → files were edited but no ship hit
 - "task"       → mentioned, named, planned but no edits yet
-- "backlog"    → deferred ("later", "next session", "tomorrow")
+- "backlog"    → deferred / open / undone: user said "later" / "next session" / "tomorrow" / "defer" / "pending" / "we'll revisit" / "nvm save it", OR the work was started but explicitly NOT finished
 - "notes"      → captured observation / idea / decision, NOT a unit of work to ship
+
+OPEN / DEFERRED work is the highest-value signal — surface it, don't bury it:
+- If the work was deferred or left unfinished, route to "backlog" (or "task" if never started) AND begin notes with "⏸ OPEN — " followed by exactly what remains and the trigger to resume (e.g. "⏸ OPEN — sim_60d --strict still fails on the archive-on-install gap; resume to decide strict-cap policy.").
+- Closure markers ("shipped" / "merged" / "done" / a commit sha) override deferral — those go to "done".
 
 Quality bar:
 - Skip conversational micro-turns ("yes", "ok", "stop", "open the board", "rerun"). They are NOT cards.
 - One unit of work = one card. If the user asked about feature X, you built it, and they reviewed it — that is ONE card titled by what X is.
 - If two units of work happened in the same hour, return two cards.
+- origin = the user's WHY; notes = the WHAT/HOW/STATE. Keep them distinct, both concrete. Prefer real file/commit/command names over vague summaries.
 - If nothing card-worthy happened, return [].
 
 Return ONLY the JSON array. NO markdown, NO commentary, NO ```json fences.
@@ -664,7 +670,9 @@ def run(project: Path, board: Path, port: int, days: int,
         bucket_min: int = 60, chunk_size: int = 1,
         date_filter: str | None = None,
         reconcile: bool = True,
-        snapshot_load: Path | None = None) -> None:
+        snapshot_load: Path | None = None,
+        end_days_ago: int = 0,
+        recent_first: bool = False) -> None:
     card_py = Path(__file__).resolve().parent / "card.py"
     if not card_py.exists():
         print(f"card.py not found at {card_py}", file=sys.stderr)
@@ -713,15 +721,32 @@ def run(project: Path, board: Path, port: int, days: int,
         print(f"  date filter: {date_filter} → {len(events)} events",
               file=sys.stderr)
 
+    # Tier boundary: drop events NEWER than end_days_ago days ago, so a deep
+    # backfill pass can cover only the OLDER history a quick --days 1 tier-1
+    # already handled (no duplicate cards across the two passes).
+    if end_days_ago and end_days_ago > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=end_days_ago)
+        events = [e for e in events if e["ts"] < cutoff]
+        if not events:
+            print(f"no events older than {end_days_ago}d ago", file=sys.stderr)
+            return
+        print(f"  end-days-ago {end_days_ago}: → {len(events)} older events",
+              file=sys.stderr)
+
     # (card_py already resolved at top of run() for snapshot-load path.)
 
     # Bucket by hour
     buckets: dict[int, list[dict]] = {}
     for ev in events:
         buckets.setdefault(_bucket_hour(ev["ts"], bucket_min), []).append(ev)
-    sorted_buckets = sorted(buckets.keys())
+    # recent_first → process the newest buckets first so the most relevant
+    # cards fly in immediately (cards still sort chronologically on the board
+    # via their bucket-stamped createdAt; this only changes EMIT order).
+    sorted_buckets = sorted(buckets.keys(), reverse=recent_first)
     if max_buckets:
-        sorted_buckets = sorted_buckets[-max_buckets:]   # most-recent N hours
+        # Keep the most-recent N buckets regardless of emit order.
+        sorted_buckets = (sorted_buckets[:max_buckets] if recent_first
+                          else sorted_buckets[-max_buckets:])
 
     # Group sorted_buckets into chunks of chunk_size for batched LLM calls.
     chunks: list[list[int]] = []
@@ -884,6 +909,12 @@ def main():
                          "and runs only the reconciliation sweep against the "
                          "saved state. Lets us iterate on recon LLM prompts "
                          "without paying ~10min per test.")
+    ap.add_argument("--end-days-ago", type=int, default=0,
+                    help="only include events OLDER than N days ago (tier-2 "
+                         "backfill boundary; 0 = no cutoff)")
+    ap.add_argument("--recent-first", action="store_true",
+                    help="emit newest buckets first so the most relevant cards "
+                         "fly in immediately (board still sorts chronologically)")
     args = ap.parse_args()
     os.environ["BOARD_SERVER"] = f"http://127.0.0.1:{args.port}"
     run(args.project.resolve(), args.board.resolve(), args.port,
@@ -891,7 +922,9 @@ def main():
         workers=args.workers, bucket_min=args.bucket_min,
         chunk_size=args.chunk_size, date_filter=args.date,
         reconcile=not args.no_reconcile,
-        snapshot_load=args.snapshot_load)
+        snapshot_load=args.snapshot_load,
+        end_days_ago=args.end_days_ago,
+        recent_first=args.recent_first)
 
 
 if __name__ == "__main__":

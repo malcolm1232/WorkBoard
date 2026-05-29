@@ -184,6 +184,7 @@ if [[ "$REPLAY_MODE" == "hourly" ]]; then
                --days    "$DAYS"
                --bucket-min "$HOURLY_BUCKET_MIN"
                --chunk-size "$HOURLY_CHUNK_SIZE"
+               --recent-first
                --max-buckets "$HOURLY_MAX_BUCKETS")
   if [[ -n "$HOURLY_DATE" ]]; then
     HOURLY_ARGS+=(--date "$HOURLY_DATE")

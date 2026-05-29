@@ -449,18 +449,31 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
         except Exception:
             time.sleep(0.2)
 
-    cmd = [sys.executable, str(extractor),
-           "--project", str(project_root),
-           "--board", str(board_dir / "board.json"),
-           "--port", str(port),
-           "--days", str(days),
-           "--bucket-min", str(bucket_min),
-           "--chunk-size", str(chunk_size),
-           "--show-lifecycle"]
-    try:
-        subprocess.run(cmd, timeout=1800)
-    except Exception as e:
-        print(f"hourly bootstrap fill failed: {e}", file=sys.stderr)
+    base = [sys.executable, str(extractor),
+            "--project", str(project_root),
+            "--board", str(board_dir / "board.json"),
+            "--port", str(port),
+            "--bucket-min", str(bucket_min),
+            "--chunk-size", str(chunk_size),
+            "--show-lifecycle", "--recent-first"]
+
+    # Two-tier fill so the user can start working immediately:
+    #   TIER 1 — the last 1 day, newest-first → the most relevant cards fly in
+    #            within seconds.
+    #   TIER 2 — the rest of the window (older than 1 day), backfilling in the
+    #            background while the user works. Skipped if days <= 1.
+    # This runs in a daemon thread; card writes serialize through the server's
+    # write lock, so a concurrent user editing the board cannot corrupt it.
+    tiers = [("tier-1 (last 1d)", ["--days", "1"])]
+    if days > 1:
+        tiers.append((f"tier-2 (older, ≤{days}d)",
+                      ["--days", str(days), "--end-days-ago", "1"]))
+    for label, extra in tiers:
+        print(f"hourly bootstrap fill: {label}", file=sys.stderr)
+        try:
+            subprocess.run(base + extra, timeout=3600)
+        except Exception as e:
+            print(f"hourly bootstrap fill {label} failed: {e}", file=sys.stderr)
 
 
 def atomic_write(path: Path, data: bytes) -> None:
