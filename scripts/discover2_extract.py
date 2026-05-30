@@ -420,7 +420,7 @@ def task_to_record(t: dict, project: Path) -> dict:
 
 __all__ = [
     "SHIP_STRONG_RE", "SHIP_WEAK_RE", "DONE_CLOSER_RE", "TRIVIAL_RE",
-    "CONT_MARKERS", "SPLIT_MIN_GAP_S", "MANDATORY_RE", "PHASE_ENUM_RE",
+    "CONT_MARKERS", "SPLIT_MIN_GAP_S", "MANDATORY_RE", "DEFER_RE", "PHASE_ENUM_RE",
     "NUMBERED_LIST_LINE_RE", "BULLET_LIST_LINE_RE",
     "bucket_id", "split_into_subtasks", "is_trivial", "is_continuation",
     "should_split", "files_in_window", "classify_ship", "extract_tasks",
