@@ -178,6 +178,33 @@ def broadcast(name: str, data: dict) -> None:
             _clients.remove(q)
 
 
+def _wait_for_sse_client(timeout: float = 60.0, poll: float = 0.25) -> bool:
+    """Block until at least one browser's EventSource is connected, or timeout.
+
+    The install / History-Replay fly streams cards as SSE events with NO replay
+    buffer. If it starts before the user's browser has finished loading and
+    opened its EventSource, the cards animate to an empty audience (sseClients=0)
+    and a later refresh shows only static end-state — the exact "I didn't see it
+    fly" failure. Gating the live fly on a connected client guarantees it's
+    actually watched. Returns False on timeout so headless / cron installs still
+    build the board (they just don't wait forever for a browser that never opens).
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _clients_lock:
+            if _clients:
+                return True
+        time.sleep(poll)
+    return False
+
+
+def _gated_stream(fn, *fn_args) -> None:
+    """Wait for a watching browser, then run the card-streaming fn. Keeps the
+    install fly from animating to nobody (the sseClients=0 race)."""
+    _wait_for_sse_client()
+    fn(*fn_args)
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     board_dir: Path = None  # set by main()
     auth_token: str | None = None  # set by main() — #116 LAN-AUTH; None = open
@@ -705,26 +732,32 @@ def main():
                 #   discover          — cheap discover2 'plop' (no API key needed).
                 if not args.no_discover:
                     if args.bootstrap_mode in ("inline", "haiku") and not args.legacy_discover:
-                        threading.Thread(
-                            target=_stream_hourly_cards,
-                            args=(start, board_dir, args.port,
+                        _tgt = _stream_hourly_cards
+                        _targs = (start, board_dir, args.port,
                                   args.discover_days, args.bucket_min,
                                   args.chunk_size,
                                   args.harvest_project.resolve()
                                   if args.harvest_project else None,
-                                  args.bootstrap_mode),
-                            daemon=True,
-                        ).start()
+                                  args.bootstrap_mode)
+                        # inline only STAGES (main Claude emits later) — nothing
+                        # to watch, so don't make staging wait on a browser.
+                        _flies = (args.bootstrap_mode == "haiku")
                     else:
-                        threading.Thread(
-                            target=_stream_discovered_cards,
-                            args=(start, board_dir, args.port,
+                        _tgt = _stream_discovered_cards
+                        _targs = (start, board_dir, args.port,
                                   args.discover_days, args.discover_max,
                                   0.25, args.legacy_discover,
                                   args.harvest_project.resolve()
-                                  if args.harvest_project else None),
-                            daemon=True,
-                        ).start()
+                                  if args.harvest_project else None)
+                        _flies = True  # discover plops cards live → gate on a viewer
+                    # Gate the LIVE fly on a connected browser so cards never
+                    # stream to an empty audience (sseClients=0). Staging-only
+                    # (inline) runs immediately.
+                    if _flies:
+                        _thread_target = (lambda t=_tgt, a=_targs: _gated_stream(t, *a))
+                    else:
+                        _thread_target = (lambda t=_tgt, a=_targs: t(*a))
+                    threading.Thread(target=_thread_target, daemon=True).start()
                 # Nudge first-time installers toward wiring the hook so the
                 # board doesn't silently drift during long active-coding
                 # sessions (root cause of card #84).
