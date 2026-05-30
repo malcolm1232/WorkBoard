@@ -620,6 +620,8 @@ If a Done card has empty `writeup`, that's a bug — fill it.
 
 ## First-time bootstrap — the "live build" install moment (v4)
 
+> **Canonical name: the History Replay.** Mining a project's past `~/.claude` chat history and flying the reconstructed cards onto a fresh empty board (`task → in-progress → done`, incl. real bug-bounces/improves). It is the **retrospective** backfill — distinct from the **going-forward** per-card lifecycle capture in §E. Say "History Replay" for this; the dev harness is `dev/simulate_install.sh`.
+
 When `board/board.json` doesn't exist yet, the install is a **show**: empty board appears in the browser, then cards stream in one-by-one with pop animations. The user *watches their own history materialize*. Don't shortcut this — the visible build is the value.
 
 Run these steps in order. Each is one Bash call.
