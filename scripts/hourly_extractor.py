@@ -92,8 +92,65 @@ def _bucket_label(bucket: int, bucket_min: int = 60) -> str:
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def build_digest(bucket_events: list[dict], project: Path) -> str:
-    """Compact chronological digest of an hour of events for the LLM."""
+# ---------- #299 DIGEST-COMPACT: lossless digest compaction ----------------
+# build_digest is 65% assistant "head" lines, and a large share of those carry
+# ZERO work signal — code-fence artifacts from convo dumps (```json / bare [ ]),
+# short connective tissue ("Sync + re-test:", "Done.", "Smoke test:"), and exact
+# repeats. We drop ONLY those, keeping every survivor BYTE-IDENTICAL.
+#
+# HARD GATE (protects the "never miss a point" star feature): a head is dropped
+# ONLY if it has NO work signal AND is either a code-fence artifact or a short
+# (≤45-char) connector. USER prompts, COMMIT / file-edit / MEMORY / PLAN lines,
+# and any head carrying a sha / card-ref / file / §-rev / decision figure are
+# NEVER dropped — even when they look like chatter. Set DIGEST_COMPACT=0 to
+# disable (used for A/B measurement; on by default).
+_COMPACT = os.environ.get("DIGEST_COMPACT", "1") != "0"
+
+# Work-signal tokens. If a head matches any, it is KEPT no matter its shape.
+_SIGNAL_RE = re.compile(
+    r"`[^`]+`"                                   # `code`/`file` spans
+    r"|/[\w./-]+"                                 # path-like tokens
+    r"|\b[\w-]+\.(py|md|json|js|html|sh|txt|css|yml|yaml|toml|service|plist|cfg)\b"
+    r"|\b[0-9a-f]{7,40}\b"                        # commit shas
+    r"|#\d+"                                      # card refs
+    r"|§|\brev\b|\bHEAD\b"                        # section / rev / HEAD
+    r"|\b\d{2,}\b",                               # counts / result figures / ports
+    re.I,
+)
+# Lines that are pure convo-dump artifacts (an assistant message that opened with
+# a JSON block → the harvested "head" is just the fence/bracket). Never signal.
+_CODE_ARTIFACT_RE = re.compile(r"^(`{3}\w*|\[\]?|\]|\{\}?|\}|json)$")
+
+
+def _head_droppable(head: str) -> bool:
+    """True iff this assistant head is safe-to-drop boilerplate: NO work signal
+    AND (a code-fence artifact OR a short ≤45-char connector). Conservative by
+    design — long lines are kept even when they open with 'Now…'/'Stopped…'
+    because they routinely continue into a real decision."""
+    t = head.strip()
+    if not t:
+        return True
+    if _SIGNAL_RE.search(t):
+        return False
+    if _CODE_ARTIFACT_RE.match(t):
+        return True
+    return len(t) <= 45
+
+
+def _detime(line: str) -> str:
+    """Strip the leading '  [HH:MM:SS] ' so identical heads at different times
+    collapse to one dedup key."""
+    return re.sub(r"^\s*\[\d\d:\d\d:\d\d\]\s*", "", line).strip()
+
+
+def build_digest(bucket_events: list[dict], project: Path,
+                 seen_heads: set | None = None) -> str:
+    """Compact chronological digest of an hour of events for the LLM.
+
+    #299: applies lossless compaction (drop boilerplate heads, collapse
+    consecutive dups, cross-bucket-dedup repeated non-signal heads). Pass a
+    shared `seen_heads` set across buckets in one chunk to dedup across them.
+    """
     lines: list[str] = []
     for ev in bucket_events:
         ts = ev["ts"].strftime("%H:%M:%S")
@@ -110,6 +167,17 @@ def build_digest(bucket_events: list[dict], project: Path) -> str:
                 fnames = ", ".join(Path(f).name for f in files[:5])
                 lines.append(f"  [{ts}] CLAUDE edited: {fnames}")
             if head:
+                # #299: drop pure-boilerplate heads (lossless — no work signal).
+                if _COMPACT and _head_droppable(head):
+                    continue
+                # #299: cross-bucket dedup of repeated NON-signal heads. Signal
+                # heads are kept even if repeated (a repeat is meaningful there).
+                if _COMPACT and seen_heads is not None \
+                        and not _SIGNAL_RE.search(head):
+                    key = head.strip()
+                    if key in seen_heads:
+                        continue
+                    seen_heads.add(key)
                 lines.append(f"  [{ts}] CLAUDE: {head}")
         elif kind == "git_commit":
             sha = (ev.get("meta") or {}).get("shaShort", "")
@@ -118,6 +186,18 @@ def build_digest(bucket_events: list[dict], project: Path) -> str:
             lines.append(f"  [{ts}] MEMORY: {ev['text']}")
         elif kind == "plan_write":
             lines.append(f"  [{ts}] PLAN: {ev['text']}")
+    # #299: collapse consecutive identical CLAUDE-head lines (a repeated chatter
+    # line carries no new info). Protected line types (USER / COMMIT / edited /
+    # MEMORY / PLAN) are left untouched so the hard gate stays provably clean —
+    # even an exact-dup file line is kept rather than risk the never-miss promise.
+    if _COMPACT:
+        deduped: list[str] = []
+        for ln in lines:
+            if (deduped and ln == deduped[-1]
+                    and "] CLAUDE:" in ln):   # only fold head-line dupes
+                continue
+            deduped.append(ln)
+        lines = deduped
     return "\n".join(lines)
 
 
@@ -139,8 +219,9 @@ def extract_cards_for_chunk(chunk: list[tuple[str, list[dict]]],
     returns a flat card array. Pays the claude -p cold-start once per chunk
     instead of per bucket."""
     sections: list[str] = []
+    seen_heads: set = set()   # #299: cross-bucket dedup within this chunk
     for label, bevents in chunk:
-        digest = build_digest(bevents, project)
+        digest = build_digest(bevents, project, seen_heads=seen_heads)
         if not digest.strip():
             continue
         sections.append(f"=== BUCKET {label} ===\n{digest}")
@@ -375,6 +456,10 @@ def _emit_extraction_pending(board: Path, card_py: Path,
     quality than Haiku. Returns the number of chunks staged."""
     pending_path = board.parent / "extraction_pending.json"
     staged = []
+    # #299: ONE seen-set across ALL chunks. Main Claude reads every staged digest
+    # in a single context, so a non-signal head repeated in two different buckets
+    # is redundant for the reader — dedup it end-to-end, not just per chunk.
+    seen_heads: set = set()
     for ck in chunks:
         ev = [e for k in ck for e in buckets.get(k, [])]
         if not ev:
@@ -385,7 +470,7 @@ def _emit_extraction_pending(board: Path, card_py: Path,
         staged.append({
             "label": label,
             "bucket_ts_iso": ts_iso,
-            "digest": build_digest(ev, project),
+            "digest": build_digest(ev, project, seen_heads=seen_heads),
         })
     payload = {
         "written_at": datetime.now(timezone.utc).isoformat(),
