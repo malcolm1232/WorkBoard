@@ -9,6 +9,7 @@ live in card.py, the CLI entry point.
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import datetime
 import difflib
