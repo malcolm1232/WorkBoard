@@ -123,7 +123,12 @@ fi
 # the extractor ourselves below.
 BOOT_DISCOVER=""
 [ -n "$HARVEST" ] && BOOT_DISCOVER="--no-discover"
-nohup "$PY" "${SCRIPTS}/serve.py" --project "$PROJECT" --port "$PORT" --bootstrap $BOOT_DISCOVER \
+# With --harvest the board lives in the throwaway $PROJECT dir, so the title
+# would auto-derive to that dir's basename (e.g. "project"). Name it after the
+# harvested source so the board reads "WorkBoard — <harvested project>".
+BOOT_TITLE=""
+[ -n "$HARVEST" ] && BOOT_TITLE="--title $(basename "$HARVEST")"
+nohup "$PY" "${SCRIPTS}/serve.py" --project "$PROJECT" --port "$PORT" --bootstrap $BOOT_DISCOVER $BOOT_TITLE \
   >"${PROJECT}/.board-server.log" 2>&1 &
 # Wait for /health.
 for _ in $(seq 1 25); do
