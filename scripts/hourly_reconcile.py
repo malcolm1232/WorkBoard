@@ -93,6 +93,7 @@ def _llm_reconcile(cards: list[dict], events: list[dict],
             [_CLAUDE_BIN, "-p", "--output-format", "text",
              "--model", _LLM_MODEL],
             input=full, capture_output=True, text=True, timeout=timeout_s,
+            env=_LLM_ENV,   # MAX_THINKING_TOKENS=0 — the haiku-fill bottleneck fix
         )
     except (FileNotFoundError, subprocess.SubprocessError) as e:
         print(f"  ! recon LLM call failed: {e}", file=sys.stderr)

@@ -90,6 +90,7 @@ def extract_cards_for_chunk(chunk: list[tuple[str, list[dict]]],
             [_CLAUDE_BIN, "-p", "--output-format", "text",
              "--model", _LLM_MODEL],
             input=full, capture_output=True, text=True, timeout=timeout_s,
+            env=_LLM_ENV,   # MAX_THINKING_TOKENS=0 — the haiku-fill bottleneck fix
         )
     except (FileNotFoundError, subprocess.SubprocessError) as e:
         print(f"  ! LLM call failed for chunk [{label_summary}]: {e}",

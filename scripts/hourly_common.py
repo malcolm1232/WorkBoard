@@ -17,6 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 _LLM_MODEL = os.environ.get("HOURLY_MODEL", "haiku")
 
+# Claude Code runs the model with EXTENDED THINKING on by default — for this
+# stateless digest→JSON extraction that burns ~5k reasoning tokens/call (stripped
+# from the output, so invisible) and dominates latency (~50s/call). Forcing
+# MAX_THINKING_TOKENS=0 cuts output_tokens ~13× (5220→392) and api time ~15×
+# (53s→3.5s) with cards fully intact — it was THE haiku-fill bottleneck (measured
+# 2026-05-31, not card verbosity/MCP/chunk-size/parallelism). Every claude -p
+# call below MUST use this env. Override-respecting: honors a caller's own value.
+_LLM_ENV = {**os.environ}
+_LLM_ENV.setdefault("MAX_THINKING_TOKENS", "0")
+
 
 # ---------- digest builder ------------------------------------------------
 
@@ -117,4 +127,4 @@ Return ONLY the JSON array. NO markdown, NO commentary, NO ```json fences.
 """
 
 
-__all__ = ["_CLAUDE_BIN", "_LLM_MODEL", "_LLM_PROMPT", "_bucket_hour", "_bucket_label", "build_digest"]
+__all__ = ["_CLAUDE_BIN", "_LLM_MODEL", "_LLM_ENV", "_LLM_PROMPT", "_bucket_hour", "_bucket_label", "build_digest"]
