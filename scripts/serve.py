@@ -797,7 +797,8 @@ def _start_bootstrap_stream(args, start, board_dir):
                  args.chunk_size,
                  args.harvest_project.resolve()
                  if args.harvest_project else None,
-                 args.bootstrap_mode)
+                 args.bootstrap_mode,
+                 True)  # #285 seed_if_empty: never a blank board on day one
         flies = (args.bootstrap_mode == "haiku")
     else:
         tgt = _stream_discovered_cards
@@ -805,7 +806,8 @@ def _start_bootstrap_stream(args, start, board_dir):
                  args.discover_days, args.discover_max,
                  0.25, args.legacy_discover,
                  args.harvest_project.resolve()
-                 if args.harvest_project else None)
+                 if args.harvest_project else None,
+                 True)  # #285 seed_if_empty: never a blank board on day one
         flies = True  # discover plops cards live → gate on a viewer
     if flies:
         thread_target = (lambda t=tgt, a=targs: _gated_stream(t, *a))

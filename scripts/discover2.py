@@ -214,6 +214,11 @@ def main():
     ap.add_argument("--max-tasks", type=int, default=40)
     ap.add_argument("--all-projects", action="store_true",
                     help="don't filter tasks by project")
+    ap.add_argument("--seed-cross-project-if-empty", action="store_true",
+                    help="#285: if the project filter yields NO tasks (fresh "
+                         "adopter with no local history), fall back to the "
+                         "unfiltered cross-project tasks so the board isn't "
+                         "blank on day one. Off by default (strict scope).")
     ap.add_argument("--legacy", action="store_true",
                     help="fall back to discover.py")
     ap.add_argument("--ask-convo", action="store_true",
@@ -270,7 +275,19 @@ def main():
 
     # Project filter (Bug 1: permissive — keep tasks with ANY signal in proj)
     if not args.all_projects:
-        tasks = [t for t in tasks if task_in_project(t, project)]
+        scoped = [t for t in tasks if task_in_project(t, project)]
+        # #285 never-empty first-run seed: a fresh adopter's new repo has zero
+        # in-project tasks, so strict scoping comes up blank — silently breaking
+        # VISION's "see your last week" promise. When asked to seed, fall back to
+        # the unfiltered cross-project tasks for this first fill, loudly (VISION
+        # §4: no silent caps). Existing projects keep their own tasks, so this
+        # never fires for them.
+        if not scoped and tasks and args.seed_cross_project_if_empty:
+            print("⚠ #285 seed: no tasks in this project yet — seeding from "
+                  "recent cross-project history so day one isn't blank.",
+                  file=sys.stderr)
+        else:
+            tasks = scoped
 
     tasks.sort(key=lambda t: t["ts_start"], reverse=True)
     total_found = len(tasks)

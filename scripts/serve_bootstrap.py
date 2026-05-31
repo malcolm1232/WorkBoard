@@ -324,7 +324,8 @@ def _stream_discovered_cards(project_root: Path, board_dir: Path,
                               port: int, days: int, max_items: int,
                               delay_s: float = 0.25,
                               legacy: bool = False,
-                              harvest_root: Path | None = None) -> None:
+                              harvest_root: Path | None = None,
+                              seed_if_empty: bool = False) -> None:
     """Background-thread worker: run discover2.py (or discover.py if --legacy),
     then issue `card.py add` for each task at `delay_s` pacing. Cards land via
     the live HTTP server, which fires SSE events — the browser animates them in.
@@ -350,6 +351,8 @@ def _stream_discovered_cards(project_root: Path, board_dir: Path,
            "--project", str(project_root),
            "--days", str(days)]
     cmd += ["--max-sessions" if legacy else "--max-tasks", str(max_items)]
+    if seed_if_empty and not legacy:  # #285 (discover2 only; legacy has no flag)
+        cmd += ["--seed-cross-project-if-empty"]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if out.returncode != 0:
@@ -392,7 +395,8 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
                           days: int, bucket_min: int = 30,
                           chunk_size: int = 2,
                           harvest_root: Path | None = None,
-                          mode: str = "inline") -> None:
+                          mode: str = "inline",
+                          seed_if_empty: bool = False) -> None:
     """Background-thread worker: the HIGH-COMPUTE startup fill (card #265/#268).
 
     Runs hourly_extractor.py over the project's full history — multi-source
@@ -402,8 +406,11 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
     quality path the user chose as the install/startup behaviour, replacing the
     cheap discover2 'plop'. Compute-heavy by design (#264 tracks a light rework).
 
-    Needs the `claude` CLI on PATH; if extraction can't run, the board simply
-    stays empty (a genuine new user with no history sees an empty board)."""
+    seed_if_empty (#285): on a fresh repo with no local history, seed the first
+    fill from recent cross-project history so day one isn't blank.
+
+    Needs the `claude` CLI on PATH for haiku mode; if that's absent the board
+    falls back to the cheap discover path rather than staying empty."""
     script_dir = Path(__file__).resolve().parent
     extractor = script_dir / "hourly_extractor.py"
     if not extractor.exists():
@@ -422,9 +429,6 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
     # harvest_root lets the board live in one dir while history is mined from
     # another (the isolated-sim / --demo case). Defaults to the board's own
     # project — the normal same-project install.
-    # harvest_root lets the board live in one dir while history is mined from
-    # another (the isolated-sim / --demo case). Defaults to the board's own
-    # project — the normal same-project install.
     base = [sys.executable, str(extractor),
             "--project", str(harvest_root or project_root),
             "--board", str(board_dir / "board.json"),
@@ -432,6 +436,8 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
             "--bucket-min", str(bucket_min),
             "--chunk-size", str(chunk_size),
             "--recent-first", "--mode", mode]
+    if seed_if_empty:
+        base += ["--seed-cross-project-if-empty"]  # #285 never-empty day one
 
     # INLINE (default, free): one fast pass over the whole window that stages
     # extraction_pending.json — main Claude (the session the user is already in)

@@ -283,6 +283,37 @@ def section_discover() -> None:
            "" if r.returncode == 0 else (r.stderr.strip()[-120:]))
 
 
+def section_seed() -> None:
+    """#285: a fresh adopter's empty project must NOT yield a blank board.
+    Strict scope on a project with no local history → 0 tasks; the
+    --seed-cross-project-if-empty fallback → non-empty (cross-project seed)."""
+    print("H. #285 fresh-repo never-empty seed (discover2)")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="wb285smoke.")
+    try:
+        base = [PY, str(SCRIPTS / "discover2.py"),
+                "--project", tmp, "--days", "3", "--max-tasks", "10"]
+        strict = subprocess.run(base, capture_output=True, text=True)
+        seeded = subprocess.run(base + ["--seed-cross-project-if-empty"],
+                                capture_output=True, text=True)
+        n_strict = json.loads(strict.stdout).get("taskCount", -1) if strict.returncode == 0 else -1
+        n_seed = json.loads(seeded.stdout).get("taskCount", -1) if seeded.returncode == 0 else -1
+        record("strict scope on fresh repo → 0 tasks", n_strict == 0,
+               f"taskCount={n_strict}")
+        # Only meaningful if the machine HAS cross-project history to seed from.
+        if n_seed > 0:
+            record("seed fallback on fresh repo → non-empty", True,
+                   f"taskCount={n_seed}")
+            record("seed notice printed (no silent cap)",
+                   "#285 seed" in seeded.stderr, "")
+        else:
+            record("seed fallback (no cross-project history to seed)", True,
+                   "skipped — clean machine has no history")
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     fast = "--fast" in sys.argv
     print("=" * 60)
@@ -292,7 +323,8 @@ def main() -> int:
     # full adds the harvest-based functional checks (~15s): the pre-release gate.
     sections = (section_imports, section_cli, section_audit, section_sweep_status)
     if not fast:
-        sections += (section_lifecycle, section_measure, section_discover)
+        sections += (section_lifecycle, section_measure, section_discover,
+                     section_seed)
     for sec in sections:
         try:
             sec()

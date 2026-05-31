@@ -257,13 +257,33 @@ def _run_snapshot_load(board: Path, card_py: Path,
 
 def _filter_events(events: list[dict], project: Path,
                    date_filter: str | None,
-                   end_days_ago: int) -> list[dict] | None:
+                   end_days_ago: int,
+                   seed_if_empty: bool = False) -> list[dict] | None:
     """Apply project-scope, date-pin and tier-boundary filters in order.
     Returns the filtered events, or None if a filter emptied them (the
     caller then returns — matching the original early-return behavior)."""
     # Filter to project scope: drop jsonl events whose cwd is unrelated.
-    events = [e for e in events if e["kind"] != "user_prompt"
+    scoped = [e for e in events if e["kind"] != "user_prompt"
               or _cwd_in_project(e, project)]
+    # #285 never-empty first-run seed: a brand-new repo has ZERO in-project
+    # user prompts, so project-scoping strips all conversation signal and the
+    # board comes up blank on day one — silently breaking VISION's "see your
+    # last week of work" promise for every new adopter. When asked to seed
+    # (bootstrap only), detect that exact case — we HAD prompts but kept none
+    # in-project — and fall back to the UNFILTERED cross-project history for
+    # this first fill, loudly (VISION §4: no silent caps). Existing boards keep
+    # in-project prompts so this never fires for them; going-forward capture
+    # stays project-scoped because the cron/hourly pass runs without this flag.
+    if seed_if_empty:
+        had_prompts = any(e["kind"] == "user_prompt" for e in events)
+        kept_prompts = any(e["kind"] == "user_prompt" for e in scoped)
+        if had_prompts and not kept_prompts:
+            print("⚠ #285 seed: no Claude history in this project yet — "
+                  "seeding the board from your recent CROSS-PROJECT history so "
+                  "day one isn't blank. Going-forward cards stay project-scoped.",
+                  file=sys.stderr)
+            scoped = events  # cross-project seed (bounded by --days window)
+    events = scoped
     # Date pin: keep only events that fall on this UTC calendar day.
     if date_filter:
         try:
@@ -471,7 +491,8 @@ def run(project: Path, board: Path, port: int, days: int,
         end_days_ago: int = 0,
         recent_first: bool = False,
         mode: str = "haiku",
-        sources: set | None = None) -> None:
+        sources: set | None = None,
+        seed_if_empty: bool = False) -> None:
     card_py = Path(__file__).resolve().parent / "card.py"
     if not card_py.exists():
         print(f"card.py not found at {card_py}", file=sys.stderr)
@@ -486,7 +507,8 @@ def run(project: Path, board: Path, port: int, days: int,
     if not events:
         print("no events to extract", file=sys.stderr)
         return
-    events = _filter_events(events, project, date_filter, end_days_ago)
+    events = _filter_events(events, project, date_filter, end_days_ago,
+                            seed_if_empty=seed_if_empty)
     if events is None:
         return
 
@@ -555,6 +577,11 @@ def main():
                     help="haiku = claude -p per chunk (costs usage); "
                          "inline = stage extraction_pending.json for main Claude "
                          "to emit (free, no Haiku, higher quality)")
+    ap.add_argument("--seed-cross-project-if-empty", action="store_true",
+                    help="#285: if this project has NO local history (fresh "
+                         "adopter), seed the first fill from recent cross-project "
+                         "history so the board isn't blank on day one. Off by "
+                         "default (strict project scope); bootstrap turns it on.")
     args = ap.parse_args()
     os.environ["BOARD_SERVER"] = f"http://127.0.0.1:{args.port}"
     run(args.project.resolve(), args.board.resolve(), args.port,
@@ -567,7 +594,8 @@ def main():
         recent_first=args.recent_first,
         mode=args.mode,
         sources=({s.strip() for s in args.sources.split(",") if s.strip()}
-                 if args.sources else None))
+                 if args.sources else None),
+        seed_if_empty=args.seed_cross_project_if_empty)
 
 
 if __name__ == "__main__":
