@@ -9,6 +9,25 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### Changed — autonomous fill is the default (2026-05-31)
+- **`--bootstrap-mode` / `install.sh --fill` default flipped `inline → haiku`** —
+  a fresh install now fills the board **autonomously** (no main-Claude step), the
+  "npx-install just works" experience. It uses the user's existing Claude login
+  via `claude -p` — **no API key**. `inline` stays as an opt-in (free, full
+  context, highest quality, but waits on a live session to emit).
+
+### Fixed — haiku fill: speed, robustness, demo auth (2026-05-31)
+- **`MAX_THINKING_TOKENS=0`** (`f36a25b`) — the haiku-fill slowness was extended
+  *thinking* tokens (~5k/call → ~50s), not card verbosity, MCP, or chunk size.
+  Forcing them off cut a full harvest **209s → 34s (~6×)** with identical quality.
+- **Robust JSON salvage** (`5327920`) — `parse_card_array` recovers cards from
+  prose-wrapped or truncated model output (jsonl digests carry chat turns that
+  derail Haiku into prose), eliminating the 90s-timeout retry cascade.
+- **`--demo` haiku auth** (`e09fb68`) — the isolated demo config dir broke
+  `claude -p`; `_LLM_ENV` now honors `BOARD_REAL_CLAUDE_CONFIG_DIR` so every
+  `claude -p` call (harvest + `serve.py` bootstrap) authenticates against the
+  user's real login instead of filling 0 cards while printing "fill complete".
+
 ### Added — auto-logging (Phase 3, the VISION "zero-input" promise)
 - **Auto-card on idea-intent** (`#100`) — `card.py add --auto`; deferred-intent
   markers in a prompt create a card with a 5-second Undo toast.

@@ -676,9 +676,9 @@ The template `board.json` ships with **six** columns in this canonical left-to-r
 
 ---
 
-## §J — Inline extraction: process `extraction_pending.json` (#247, the FREE default)
+## §J — Inline extraction: process `extraction_pending.json` (#247, the FREE opt-in path)
 
-Bootstrap defaults to `--bootstrap-mode inline`: rather than spending Haiku, `serve.py` stages the bucketed history into `<board>/extraction_pending.json` and lets **you (main Claude)** emit the cards — free (no extra API/usage), no key required, and higher quality than Haiku since you have full context. The SessionStart hook surfaces a `📋 INLINE EXTRACTION PENDING` line when the file exists.
+As of 260531 the bootstrap default is **`--bootstrap-mode haiku`** (autonomous — see Mode decision below). When `--bootstrap-mode inline` is chosen instead, rather than spending Haiku, `serve.py` stages the bucketed history into `<board>/extraction_pending.json` and lets **you (main Claude)** emit the cards — free (no extra API/usage), no key required, and higher quality than Haiku since you have full context. The SessionStart hook surfaces a `📋 INLINE EXTRACTION PENDING` line when the file exists.
 
 **When you see that nudge (or find the file), process it — don't ask:**
 
@@ -709,7 +709,7 @@ Bootstrap defaults to `--bootstrap-mode inline`: rather than spending Haiku, `se
    For each signal that **didn't already become a card**, add one. Mandatory first — a missed urgent item is the worst failure mode.
 5. **Delete `extraction_pending.json` when all chunks + the completeness sweep are done.**
 
-**Mode decision (durable):** `inline` is the **default** (free, no key, full-context quality). `--bootstrap-mode haiku` stays as an **opt-in** — do NOT remove it — it's the autonomous fallback for **headless / no-live-session installs** (cron, standalone `serve.py`, install-and-never-prompt) and **huge histories** where inline would flood the main session's context; it runs `claude -p` in the background. `--bootstrap-mode discover` is the zero-LLM heuristic floor.
+**Mode decision (durable, flipped 260531):** `--bootstrap-mode haiku` is now the **default** — autonomous, fills the board with **no main-Claude step** (the "npx-install just works" experience). It runs `claude -p` in the background using the user's **existing Claude login (NO API key)**, and is now fast + robust: `MAX_THINKING_TOKENS=0` cut it ~6× (the real bottleneck was extended-thinking tokens, not card verbosity), and `parse_card_array` salvages prose-wrapped output so jsonl-heavy chunks no longer fail. `inline` stays as an **opt-in** — do NOT remove it — it's **free** (no usage) and **highest quality** (full context, dedupes a multi-chunk effort into ONE card, reconstructs bug-bounces that per-chunk Haiku can't), but it only fills once *you* process §J, so prefer it when a live session is present and quality matters more than hands-off autonomy. `--bootstrap-mode discover` is the zero-LLM heuristic floor.
 
 ---
 
