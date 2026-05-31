@@ -184,7 +184,17 @@ if [ -n "$HARVEST" ] && [ "$SERVER_OK" = "1" ]; then
       # HAIKU: autonomous background workers (claude -p) emit the cards themselves —
       # one command, board fills + HUD ticks with no main-Claude step. Costs Haiku.
       say "filling board from ${HARVEST} history via HAIKU (autonomous — no main-Claude step)"
-      "$PY" "${SCRIPTS}/hourly_extractor.py" \
+      # The haiku `claude -p` calls need the REAL Claude config — the isolated
+      # --demo config dir is empty, so claude treats it as unconfigured and every
+      # call exits 1 → 0 cards (while still printing "fill complete"). Restore
+      # ORIG_CLAUDE_CONFIG_DIR (captured before --demo overrode it) for this call;
+      # unset it entirely when there was none so claude falls back to ~/.claude.
+      if [ -n "$ORIG_CLAUDE_CONFIG_DIR" ]; then
+        HARVEST_CC=(env "CLAUDE_CONFIG_DIR=$ORIG_CLAUDE_CONFIG_DIR")
+      else
+        HARVEST_CC=(env -u CLAUDE_CONFIG_DIR)
+      fi
+      "${HARVEST_CC[@]}" "$PY" "${SCRIPTS}/hourly_extractor.py" \
         --project "$HARVEST" --board "${PROJECT}/board/board.json" --port "$PORT" \
         --days "$HARVEST_DAYS" --bucket-min 30 --chunk-size 2 --recent-first --mode haiku \
         || warn "harvest haiku fill reported an issue (non-fatal)"
