@@ -136,9 +136,28 @@ If you find yourself responding to a substantive prompt without having read thes
 
 ### Other rules
 
-1. **Commit on every turn.** After any meaningful change (code, docs, plan, card movement that touches files), make an atomic commit. Don't batch. Push if a remote is configured. If a turn produced no file changes, no commit — but explicitly say so. User's standing rule from `feedback_commit_each_change`: "make it reflexive."
+1. **Every code change must leave the codebase ARCHITECTURALLY CLEAN.** Correctness (tests pass) is necessary but **not sufficient** — a change that works but degrades the structure is not done. Before and after any non-trivial code change, check it against the definition below; if the change introduces a new architectural smell, fix it as part of the same work or stop and flag it.
 
-2. **Dump full raw conversation at session end.** Append to today's file in the same dir. Format per `~/Desktop/conversation_history/instructions.md`. Never summarize; never overwrite.
+   **"Architecturally clean" means (the checklist):**
+   - **Clean modules.** Each file has ONE clear job and a name that says it. No grab-bag modules. New behavior goes in the module that owns that concern, or a new focused module — never bolted onto an unrelated one.
+   - **Bounded files.** Files stay readable (rough ceiling ~1,000 LOC). When a file outgrows its job, split it along concern lines (the #307 split pattern), keeping the public interface stable.
+   - **No god-functions.** A function does one thing. Long-but-FLAT (a declarative list, a linear sequence) is acceptable; long-AND-TANGLED (deep nesting + mixed concerns) is not — extract named helpers. **Function length is a style hint, not the test; nesting depth + mixed concerns is the real smell.**
+   - **Shallow, one-directional coupling.** Leaf utilities (`_boardio`, `_render`, `_metrics`, `_hook_*`) are imported by callers; they never reach back up. **Zero circular imports** — verify with a clean import of every module.
+   - **No duplication.** One source of truth. The repo `scripts/` is canonical; the installed skill dir is synced from it by hook (#302) — never hand-edit the copy.
+   - **Don't branch forever.** Architecture = boundaries, coupling, duplication, dependency direction. Once those are clean, STOP — do not chase every function under an arbitrary line count. That loop never converges and is not what "clean" means.
+
+   **Current architecture (the map — keep this accurate when modules change):**
+   - **`card.*`** — board CLI + state. `card.py` (entry/dispatch) · `card_state.py` (load/save/lock/schema) · `card_commands.py` (the `cmd_*` handlers).
+   - **`serve.*`** — local HTTP + SSE server. `serve.py` (runtime: handler, routes, SSE, `_run_server`) · `serve_bootstrap.py` (bootstrap + discovery→card mapping).
+   - **`hourly_*`** — history extraction pipeline (acyclic). `hourly_common.py` (shared) → `hourly_extractor.py` (orchestration: bucket/chunk/run) → `hourly_emit.py` (emit one card) → `hourly_reconcile.py` (post-pass sweep).
+   - **`discover2.*`** — heuristic harvest. `discover2.py` (entry) · `discover2_sources.py` (jsonl/convo/git/memory readers) · `discover2_extract.py` (signals→tasks). `discover.py` = legacy session-shaped fallback.
+   - **`_*` leaf helpers** — `_boardio` (atomic write + flock), `_render` (md/html export), `_metrics` (velocity), `_hook_*` (the opt-in Claude Code hooks).
+   - **Support** — `digest_compact` · `measure_digest` · `regen_index` · `sweep_status` · `port_registry` · `archive_done` · `report` · `health_check` · `log_event` · `install_*` (per-OS autostart + hook wiring).
+   - **Invariant:** 33 modules, all import clean, no cycles, one-directional coupling. The 3 historical smells (oversized files, god-functions, repo↔skill duplication) are CLOSED — don't reintroduce them.
+
+2. **Commit ON EACH CHANGE — atomically, immediately.** After *every* meaningful change (code, docs, plan, card movement that touches files), make a separate atomic commit right then. **Never batch multiple changes into one commit, and never defer committing to "later."** Push if a remote is configured. Tag a `good-state-*` anchor before risky work so any change is reversible. If a turn produced no file changes, no commit — but say so explicitly. User's standing rule from `feedback_commit_each_change`: "make it reflexive."
+
+3. **Dump full raw conversation at session end.** Append to today's file in the same dir. Format per `~/Desktop/conversation_history/instructions.md`. Never summarize; never overwrite.
 
 ## Shorthand aliases (user vocab)
 
