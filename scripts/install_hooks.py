@@ -75,14 +75,32 @@ def find_existing(settings: dict, event: str, cmd: str) -> tuple[int, int] | Non
     return None
 
 
+def _same_script(installed_cmd: str, target_cmd: str) -> bool:
+    """True if an installed hook command refers to the SAME board-steward hook
+    script as target_cmd, regardless of install path — matched by basename
+    (e.g. 'hook_session_start.sh'). Matching on the full recomputed absolute
+    path alone missed hooks wired under a previous/relocated skill dir (#371)."""
+    return os.path.basename(installed_cmd or "") == os.path.basename(target_cmd)
+
+
 def add_hook(settings: dict, event: str, cmd: str) -> str:
     if find_existing(settings, event, cmd) is not None:
         return "already-installed"
+    # If the same hook script is wired at a DIFFERENT path (relocated / old
+    # install dir), replace it instead of appending a duplicate (#371).
+    relinked = any(
+        h.get("type") == "command" and _same_script(h.get("command"), cmd)
+        and h.get("command") != cmd
+        for group in settings.get("hooks", {}).get(event, [])
+        for h in group.get("hooks", [])
+    )
+    if relinked:
+        remove_hook(settings, event, cmd)
     settings.setdefault("hooks", {}).setdefault(event, []).append({
         "matcher": HOOK_MATCHERS.get(event, ""),
         "hooks": [{"type": "command", "command": cmd}],
     })
-    return "installed"
+    return "relinked" if relinked else "installed"
 
 
 def remove_hook(settings: dict, event: str, cmd: str) -> str:
@@ -91,7 +109,7 @@ def remove_hook(settings: dict, event: str, cmd: str) -> str:
     new_groups = []
     for group in hooks:
         new_hooks = [h for h in group.get("hooks", [])
-                     if not (h.get("type") == "command" and h.get("command") == cmd)]
+                     if not (h.get("type") == "command" and _same_script(h.get("command"), cmd))]
         if len(new_hooks) != len(group.get("hooks", [])):
             removed = True
         if new_hooks:
