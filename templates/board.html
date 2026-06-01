@@ -322,8 +322,7 @@
   #board {
     display: flex;
     gap: 8px;
-    /* #361 — extra bottom padding so columns aren't flush against the page edge */
-    padding: 12px 12px 120px;
+    padding: 12px;
     overflow: auto;
     height: calc(100% - 48px);
     align-items: flex-start;
@@ -337,6 +336,11 @@
     align-self: flex-start;
     flex-shrink: 0;
     max-height: 100%;
+    /* #361 — breathing room under each column. Set on the flex ITEM, not
+       #board's padding-bottom: a flex container (display:flex) drops its
+       padding-bottom once items overflow (Chrome/Safari bug), so the gap
+       must live on the column-stack to survive the internal scroll. */
+    margin-bottom: 120px;
   }
   /* Bottom-40% drop-hint: when dragging a column over the lower half of a
      target column, show a dashed bottom edge that says "drop to stack". */
