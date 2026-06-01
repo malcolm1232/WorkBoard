@@ -777,6 +777,41 @@
     padding-left: 4px;
   }
 
+  /* #333 — kebab ⋯ trigger for the card action menu (Move to / Delete).
+     Hover-revealed so it never adds visual noise at rest. */
+  .card-kebab {
+    flex: 0 0 auto; border: 0; background: transparent;
+    color: var(--muted); font-size: 15px; line-height: 1;
+    padding: 0 3px; border-radius: 5px; cursor: pointer;
+    opacity: 0; transition: opacity .12s, background .12s;
+  }
+  .card:hover .card-kebab { opacity: .65; }
+  .card-kebab:hover, .card-kebab:focus { opacity: 1; background: rgba(217,119,87,.12); outline: none; }
+
+  /* #333 — body-level popup so it escapes column overflow:hidden clipping. */
+  .card-menu {
+    position: fixed; z-index: 400; min-width: 150px;
+    background: var(--card-bg); color: var(--ink);
+    border: 1px solid rgba(0,0,0,.10); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.18);
+    padding: 5px; font-size: 12px;
+    animation: card-menu-in 120ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  @keyframes card-menu-in { from { opacity: 0; transform: scale(.96) translateY(-3px); } to { opacity: 1; transform: none; } }
+  .card-menu-hdr {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); padding: 4px 8px 3px;
+  }
+  .card-menu-item {
+    display: block; width: 100%; text-align: left; border: 0; background: transparent;
+    color: var(--ink); font-size: 12px; padding: 6px 8px; border-radius: 6px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .card-menu-item:hover { background: rgba(217,119,87,.12); }
+  .card-menu-sep { height: 1px; background: rgba(0,0,0,.08); margin: 4px 2px; }
+  .card-menu-del { color: var(--red); }
+  .card-menu-del:hover { background: rgba(214,69,65,.12); }
+
   /* Linked-card chips inside the modal */
   .links-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .link-chip {
@@ -2254,6 +2289,30 @@ function commitCardDrag() {
   refreshActiveWork();   // #254 — repaint pulse (this path skips render())
 }
 
+// Canonical NON-DRAG move — the one source of truth for moving a card to a
+// column without dragging: the editor's Column <select> and the card kebab
+// "Move to" menu (#333) both call this. Mirrors commitCardDrag's side-effects
+// (doneAt + #254 active-work follow) minus the drag-only DOM-preview
+// bookkeeping, and FLIP-glides the card to its new column so a menu move looks
+// the same as a manual drag. No-op if the card is already in targetCol.
+function moveCardToColumn(card, targetCol) {
+  if (!card || !targetCol || card.column === targetCol) return;
+  const fromCol = card.column;
+  const rects = captureCardRects();          // FLIP: positions before the move
+  pushUndo();
+  card.column = targetCol;
+  card.updatedAt = now();
+  if (targetCol === 'done' && !card.doneAt) card.doneAt = card.updatedAt;
+  if (targetCol !== 'done') card.doneAt = null;
+  recordMove(card, fromCol, targetCol);      // #258 movement history
+  // #254 — active-work follows a move into / out of In Progress (persisted).
+  if (targetCol === 'inprogress' && fromCol !== 'inprogress') state.activeWorkId = card.id;
+  else if (fromCol === 'inprogress' && targetCol !== 'inprogress' && state.activeWorkId === card.id) state.activeWorkId = null;
+  scheduleSave();
+  render();
+  requestAnimationFrame(() => flipPlayCards(rects, { duration: 480 }));
+}
+
 function cancelCardDrag() {
   if (!_cardDrag) return;
   _cardDrag = null;
@@ -2845,10 +2904,11 @@ function renderCardCompact(card) {
   });
   // Right-click → confirm + delete. Same path as the modal Delete button
   // and the drag-to-trash zone (see deleteCard helper).
-  el.addEventListener('contextmenu', async e => {
+  // #333 — right-click opens the card action menu (Move to / Delete) instead
+  // of jumping straight to a delete confirm. Delete now lives inside that menu.
+  el.addEventListener('contextmenu', e => {
     e.preventDefault();
-    if (!(await miniConfirm('Delete card?', { sub: `"${card.title}"` }))) return;
-    deleteCard(card.id);
+    openCardMenu(card, e.clientX, e.clientY);
   });
 
   const head = document.createElement('div');
@@ -2883,6 +2943,21 @@ function renderCardCompact(card) {
     tm.onclick = (e) => e.stopPropagation();
     head.appendChild(tm);
   }
+  // #333 — kebab ⋯ opens the card action menu. Right-aligned: card-time (when
+  // present) already carries margin-left:auto so the kebab sits just right of
+  // it; otherwise the kebab carries the auto-margin itself.
+  const kebab = document.createElement('button');
+  kebab.className = 'card-kebab';
+  kebab.textContent = '⋯';
+  kebab.title = 'Card actions';
+  kebab.setAttribute('aria-label', 'Card actions');
+  if (!card.createdAt) kebab.style.marginLeft = 'auto';
+  kebab.onclick = (e) => {
+    e.stopPropagation();                       // don't open the card editor
+    const r = kebab.getBoundingClientRect();
+    openCardMenu(card, r.right, r.bottom + 4);
+  };
+  head.appendChild(kebab);
   el.appendChild(head);
 
   const title = document.createElement('div');
@@ -2987,18 +3062,7 @@ function renderModal(card) {
     if (c.id === card.column) opt.selected = true;
     colSel.appendChild(opt);
   });
-  colSel.onchange = () => {
-    const fromCol = card.column;
-    card.column = colSel.value;
-    card.updatedAt = now();
-    if (card.column === 'done' && !card.doneAt) card.doneAt = card.updatedAt;
-    if (card.column !== 'done') card.doneAt = null;
-    recordMove(card, fromCol, card.column);   // #258 movement history
-    // #254 — active-work follows a live move into In Progress (persisted).
-    if (card.column === 'inprogress' && fromCol !== 'inprogress') state.activeWorkId = card.id;
-    else if (fromCol === 'inprogress' && card.column !== 'inprogress' && state.activeWorkId === card.id) state.activeWorkId = null;
-    scheduleSave(); render();
-  };
+  colSel.onchange = () => moveCardToColumn(card, colSel.value);   // #333 — shared move helper
   meta.appendChild(colSel);
 
   const prioLabel = document.createElement('label');
@@ -3592,6 +3656,7 @@ async function renderVelocity() {
 
 function render() {
   if (!state) return;
+  closeCardMenu();   // #333 — a rebuild invalidates any open card menu
   if (_view === 'board') {
     const board = $('#board');
     board.innerHTML = '';
@@ -5231,6 +5296,69 @@ function reopenAsBug(id) {
   // Manually trigger the pulse since render() doesn't (transition-based).
   applyActiveWorkTransition(card.id, from, 'inprogress');
   toast('🐞 Reopened as bug — ' + undoHint() + ' to undo', 3200);
+}
+
+// ===== Card action menu (#333) — kebab ⋯ / right-click: Move to + Delete ====
+// A no-drag path to relocate a card (complements #332 edge auto-scroll) plus
+// a discoverable home for Delete. Rendered at document.body level so it
+// escapes the columns' overflow:hidden clipping; closes on pick, click-away,
+// or Escape.
+let _cardMenuEl = null;
+function _cardMenuAway(e) { if (_cardMenuEl && !_cardMenuEl.contains(e.target)) closeCardMenu(); }
+function _cardMenuKey(e) { if (e.key === 'Escape') closeCardMenu(); }
+function closeCardMenu() {
+  if (!_cardMenuEl) return;
+  _cardMenuEl.remove();
+  _cardMenuEl = null;
+  document.removeEventListener('mousedown', _cardMenuAway, true);
+  document.removeEventListener('keydown', _cardMenuKey, true);
+}
+function openCardMenu(card, x, y) {
+  if (!state || !card) return;
+  closeCardMenu();
+  const menu = document.createElement('div');
+  menu.className = 'card-menu';
+  // "Move to" — every column except the one the card is already in.
+  const others = state.columns.filter(c => c.id !== card.column);
+  if (others.length) {
+    const hdr = document.createElement('div');
+    hdr.className = 'card-menu-hdr';
+    hdr.textContent = 'Move to';
+    menu.appendChild(hdr);
+    others.forEach(col => {
+      const item = document.createElement('button');
+      item.className = 'card-menu-item';
+      item.textContent = col.name;
+      item.onclick = () => { closeCardMenu(); moveCardToColumn(card, col.id); };
+      menu.appendChild(item);
+    });
+    const sep = document.createElement('div');
+    sep.className = 'card-menu-sep';
+    menu.appendChild(sep);
+  }
+  const del = document.createElement('button');
+  del.className = 'card-menu-item card-menu-del';
+  del.textContent = 'Delete';
+  del.onclick = async () => {
+    closeCardMenu();
+    if (await miniConfirm('Delete card?', { sub: `"${card.title}"` })) deleteCard(card.id);
+  };
+  menu.appendChild(del);
+  document.body.appendChild(menu);
+  // Position, clamped to the viewport (kebab sits at the far-right edge, so
+  // the menu would otherwise overflow — pull it back on-screen).
+  const r = menu.getBoundingClientRect();
+  const px = Math.min(x, window.innerWidth - r.width - 8);
+  const py = Math.min(y, window.innerHeight - r.height - 8);
+  menu.style.left = Math.max(8, px) + 'px';
+  menu.style.top = Math.max(8, py) + 'px';
+  _cardMenuEl = menu;
+  // Defer the away-listener a tick so the opening click doesn't self-close it.
+  setTimeout(() => {
+    if (!_cardMenuEl) return;
+    document.addEventListener('mousedown', _cardMenuAway, true);
+    document.addEventListener('keydown', _cardMenuKey, true);
+  }, 0);
 }
 
 function deleteCard(id) {
