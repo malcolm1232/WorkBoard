@@ -324,7 +324,13 @@
     gap: 8px;
     padding: 12px;
     overflow: auto;
-    height: calc(100% - 48px);
+    /* #361 — stop the scroll area 120px short of the page bottom so the
+       tallest column never sits flush against the edge (breathing room).
+       Done by SHRINKING the container, not via padding/margin-bottom: a
+       scrollable flex container drops its children's end-side padding/margin
+       from the scroll extent (Chromium bug), so that approach renders nothing.
+       48px = page header; 120px = the bottom gap. */
+    height: calc(100% - 48px - 120px);
     align-items: flex-start;
   }
   /* #117 — vertical stack wrapper. One wrapper per stack root; the root
@@ -336,11 +342,6 @@
     align-self: flex-start;
     flex-shrink: 0;
     max-height: 100%;
-    /* #361 — breathing room under each column. Set on the flex ITEM, not
-       #board's padding-bottom: a flex container (display:flex) drops its
-       padding-bottom once items overflow (Chrome/Safari bug), so the gap
-       must live on the column-stack to survive the internal scroll. */
-    margin-bottom: 120px;
   }
   /* Bottom-40% drop-hint: when dragging a column over the lower half of a
      target column, show a dashed bottom edge that says "drop to stack". */
