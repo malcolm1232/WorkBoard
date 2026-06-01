@@ -2757,16 +2757,26 @@ function startPoll() {
   }, 3000);
 }
 
-// #337 — tab refocus. A backgrounded tab is throttled, so live SSE card-added
-// events QUEUE; on return they flush in a burst, each replaying its pop-in →
-// "the whole board re-flies to catch up" (most visible mid-fill). Instead, open
-// a short suppress window and snap straight to canonical truth in one silent
-// re-sync. The queued events then find their cards already in the DOM (add =
-// no-op) or already at their final spot (move = zero FLIP delta), so nothing
-// re-flies — the board just continues where reality is.
+// #337 — tab hide/refocus. A backgrounded tab is throttled, so live SSE events
+// BUFFER while you're away; on return the browser dispatches the whole backlog
+// at once and handleCardAdded does real DOM work per card → the main thread
+// blocks and the screen FREEZES "catching up" (worst mid-fill). Muting the
+// animation alone (the seen-set / _animSuppressed) doesn't help — the cost is
+// the DOM churn, not the pop. So: CLOSE the live stream when the tab hides
+// (nothing buffers → nothing to flush), and on return snap to canonical truth
+// in ONE render + reopen the stream. No backlog, no freeze — it just continues
+// where reality is. The poll loop is throttled while hidden too, so closing the
+// stream means the hidden tab does no work at all.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  _animSuppressUntil = Date.now() + 1200;   // cover the flush + this re-sync
+  if (document.hidden) {
+    try { _es && _es.close(); } catch (_) {}
+    _es = null; _sseConnected = false;
+    return;
+  }
+  // Coming back: suppress entrance/pop briefly, then ONE silent re-sync to the
+  // current board (a single render, not a backlog of incremental inserts), then
+  // reopen the live stream for ongoing updates.
+  _animSuppressUntil = Date.now() + 1200;
   fetch(BOARD_URL, { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : null))
     .then(incoming => {
@@ -2774,10 +2784,10 @@ document.addEventListener('visibilitychange', () => {
         _absorbState(incoming);
         render();            // playEntrance() self-suppresses via _animSuppressed()
         tickLastUpdate();
-        setStatus('live');
       }
     })
-    .catch(() => { /* transient */ });
+    .catch(() => { /* transient */ })
+    .finally(() => { startSSE(); setStatus('live'); });
 });
 
 // ===== Subtask tree helpers =====
