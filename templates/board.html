@@ -327,14 +327,13 @@
     height: calc(100% - 48px);
     align-items: flex-start;
   }
-  /* #361 — breathing room below each column. The gap lives on the column
-     (the LAST one in its stack), NOT on #board's padding-bottom or the
-     .column-stack's own margin — a scrollable flex container drops both of
-     those from its scroll extent (Chromium bug), so they render nothing. A
-     margin nested one level down (inside the stack) just adds to the stack's
-     height and IS scrollable, so the gap shows below the column while #board
-     stays full-height (horizontal scrollbar stays at the page bottom). */
-  .column-stack > .column:last-child { margin-bottom: 120px; }
+  /* #361 — breathing room at the bottom of each column. Earlier takes
+     (#board padding-bottom, .column-stack margin, last-column margin) all got
+     dropped from the scroll extent by the Chromium flex-scroll bug. The column's
+     OWN padding-bottom can't be dropped — it's part of the element's box height
+     — so the gap is guaranteed to render. It sits inside the column background,
+     below the "+ Add card" button. */
+  .column-stack > .column:last-child { padding-bottom: 120px; }
   /* #117 — vertical stack wrapper. One wrapper per stack root; the root
      and all its stackUnder descendants live inside, stacked top→bottom. */
   .column-stack {
