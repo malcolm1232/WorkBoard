@@ -513,13 +513,15 @@
      overflow-y is set). Vertical padding is bumped 2px → 10px so card
      flash/pop-in box-shadows (~14px blur) render INSIDE the clip box
      instead of being cut off at the column-body edge. */
-  /* #335 — cap the body to ~viewport so a long column (esp. Done with 100+
-     cards) scrolls WITHIN itself instead of growing the whole page. The
-     .column max-height:100% should do this, but the #117 .column-stack wrapper
-     has no definite height so that percentage doesn't resolve — a vh-based cap
-     is layout-chain-independent. ~136px leaves room for the page header (48px),
-     board + column padding, and the column header row. */
-  .column-body { overflow: hidden auto; flex: 1; min-height: 30px; max-height: calc(100vh - 136px); padding: 10px 4px; }
+  /* #335 — cap the body so a long column (esp. Done with 100+ cards) scrolls
+     WITHIN itself instead of growing the whole page unboundedly. The .column
+     max-height:100% should do this, but the #117 .column-stack wrapper has no
+     definite height so that percentage doesn't resolve — a vh-based cap is
+     layout-chain-independent. Base (100vh - 136px) reserves the page header
+     (48px) + paddings + column header; ×1.75 per user — columns run to ~175%
+     of that before scrolling internally (a little page scroll is acceptable;
+     they wanted more cards visible per column before the internal scroll). */
+  .column-body { overflow: hidden auto; flex: 1; min-height: 30px; max-height: calc((100vh - 136px) * 1.75); padding: 10px 4px; }
   .add-card-btn {
     width: 100%; text-align: left; padding: 6px 8px; margin-top: 6px;
     background: transparent; border: 0; color: var(--muted); cursor: pointer;
