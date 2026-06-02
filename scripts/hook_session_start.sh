@@ -53,9 +53,6 @@ want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import por
 # Probe for THIS board's live server on its designated port.
 server_health="$(curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
 server_port="${want_port}"
-# Was a board already up BEFORE we (maybe) spawn one? This is the WB=1 vs WB=0
-# signal that decides whether to open a browser tab below (#377).
-server_was_up=0; [ -n "${server_health}" ] && server_was_up=1
 
 # Auto-spawn if no server (covers users without launchd installed).
 if [ -z "${server_health}" ] && [ -f "${serve_py}" ]; then
@@ -74,13 +71,18 @@ if [ -z "${server_health}" ] && [ -f "${serve_py}" ]; then
   fi
 fi
 
-# Auto-open the board in the browser ONLY IF IT WASN'T ALREADY OPEN (#377).
-# Singleton model the user asked for: WB already up (server_was_up=1) → assume a
-# tab exists, DON'T pop a new one (this is what stopped the "new tab on every
-# Claude" spam). WB was down and we just spawned it (server_was_up=0) → open once.
-# If the user closed the tab while the server stays up, they re-open on request
-# ("open the workboard"). Honours BOARD_NO_AUTO_OPEN=1 for headless/CI/cron.
-if [ -n "${server_health}" ] && [ "${server_was_up}" = "0" ] && [ "${BOARD_NO_AUTO_OPEN:-0}" != "1" ]; then
+# Auto-open the board ONLY IF NO BROWSER IS CURRENTLY VIEWING IT (#377).
+# The signal the user asked for ("check if ANY WB is opened; if not, open; else
+# don't"): /health's sseClients = live browser connections. >0 → a tab is open,
+# DON'T pop another (kills the "new tab on every Claude" spam). 0 → nothing is
+# watching (no tab, or we just spawned the server) → open exactly one. To open an
+# additional / different project's board, the user just asks. board.html SSE
+# auto-reconnects, so a connected tab keeps sseClients>0 across server restarts.
+# Honours BOARD_NO_AUTO_OPEN=1 for headless/CI/cron.
+sse_clients="$(echo "${server_health}" | python3 -c "import sys,json
+try: print(int(json.load(sys.stdin).get('sseClients',0)))
+except Exception: print(0)" 2>/dev/null || echo 0)"
+if [ -n "${server_health}" ] && [ "${sse_clients:-0}" -eq 0 ] && [ "${BOARD_NO_AUTO_OPEN:-0}" != "1" ]; then
   rm -f "${project_dir}"/board/.opened-* 2>/dev/null   # sweep stale #367 stamps
   url="http://127.0.0.1:${server_port}"
   if command -v open >/dev/null 2>&1; then open "${url}" >/dev/null 2>&1 &
