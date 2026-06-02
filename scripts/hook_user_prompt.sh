@@ -31,23 +31,22 @@ if [ -z "${board_path}" ]; then
   exit 0
 fi
 
-# Optional: probe common ports for a live server matching THIS board.
-# (Pure UX sugar — adds rev to the message if we can confirm a server is up.)
+# Resolve THIS board's designated port (#374) and probe only it — so the rev
+# hint reflects this project's own server, not whichever board holds 7891.
+board_dir="$(dirname "${board_path}")"
+want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${board_dir}" "$(dirname "$0")" 2>/dev/null || echo 7891)"
 server_hint=""
-for port in 7891 7892 7893 7894 7895; do
-  health="$(curl -s --max-time 0.3 "http://127.0.0.1:${port}/health" 2>/dev/null)"
-  if [ -n "${health}" ]; then
-    rev="$(echo "${health}" | python3 -c "import sys,json
+health="$(curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
+if [ -n "${health}" ]; then
+  rev="$(echo "${health}" | python3 -c "import sys,json
 try: d=json.load(sys.stdin); print(d.get('rev','?'))
 except: pass" 2>/dev/null)"
-    if [ -n "${rev}" ] && [ "${rev}" != "?" ]; then
-      server_hint=" @ :${port} (rev ${rev})"
-      break
-    fi
+  if [ -n "${rev}" ] && [ "${rev}" != "?" ]; then
+    server_hint=" @ :${want_port} (rev ${rev})"
   fi
-done
+fi
 
-# Auto-spawn server if board found but no live server on :7891.
+# Auto-spawn server if board found but no live server on its designated port.
 # Covers the "skill installed but launchd not configured yet" case + crash recovery.
 # Lock file with 10s window prevents double-spawn on rapid prompts.
 if [ -z "${server_hint}" ]; then
@@ -59,10 +58,10 @@ if [ -z "${server_hint}" ]; then
   age=$((now_ts - last_ts))
   if [ -f "${serve_py}" ] && [ "${age}" -gt 10 ]; then
     : > "${lock}"
-    nohup python3 "${serve_py}" --project "${project_dir}" --port 7891 \
+    nohup python3 "${serve_py}" --project "${project_dir}" --port "${want_port}" \
       >/tmp/board-spawn.log 2>&1 </dev/null &
     disown 2>/dev/null || true
-    server_hint=" @ :7891 (spawning…)"
+    server_hint=" @ :${want_port} (spawning…)"
   fi
 fi
 

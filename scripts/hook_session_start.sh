@@ -42,18 +42,17 @@ fi
 [ -z "${board_path}" ] && exit 0
 
 project_dir="$(dirname "$(dirname "${board_path}")")"
+board_dir="$(dirname "${board_path}")"
 serve_py="$(dirname "$0")/serve.py"
 
-# Probe for a live server.
-server_health=""
-for port in 7891 7892 7893 7894 7895; do
-  h="$(curl -s --max-time 0.3 "http://127.0.0.1:${port}/health" 2>/dev/null)"
-  if [ -n "${h}" ]; then
-    server_health="${h}"
-    server_port="${port}"
-    break
-  fi
-done
+# Resolve THIS board's designated port (#374) — per-project, stable, never
+# collides. We probe/spawn only that port, so a session for project B can't
+# latch onto project A's server just because A happens to hold 7891.
+want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${board_dir}" "$(dirname "$0")" 2>/dev/null || echo 7891)"
+
+# Probe for THIS board's live server on its designated port.
+server_health="$(curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
+server_port="${want_port}"
 
 # Auto-spawn if no server (covers users without launchd installed).
 if [ -z "${server_health}" ] && [ -f "${serve_py}" ]; then
@@ -63,33 +62,28 @@ if [ -z "${server_health}" ] && [ -f "${serve_py}" ]; then
   age=$((now_ts - last_ts))
   if [ "${age}" -gt 10 ]; then
     : > "${lock}"
-    nohup python3 "${serve_py}" --project "${project_dir}" --port 7891 \
+    nohup python3 "${serve_py}" --project "${project_dir}" --port "${want_port}" \
       >/tmp/board-spawn.log 2>&1 </dev/null &
     disown 2>/dev/null || true
     sleep 0.8
-    server_health="$(curl -s --max-time 0.3 http://127.0.0.1:7891/health 2>/dev/null)"
-    server_port="7891"
+    server_health="$(curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
+    server_port="${want_port}"
   fi
 fi
 
-# Auto-open the board in the browser the FIRST session each day (#367). The
-# server is kept alive every session, but a tab was only ever opened at install
-# time — close it and nothing re-opened it. Guard via a per-day stamp file so we
-# pop the board once daily, not a new tab on every session/prompt. Only opens if
-# a server is actually live; honours BOARD_NO_AUTO_OPEN=1 for headless/CI/cron.
+# Auto-open the board in the browser ON EVERY SESSION (#376, was once/day #367).
+# This hook fires exactly once per Claude Code session, so opening unconditionally
+# here gives one pop per session — the user asked for the board to greet them each
+# time, not just the first session of the day. Only opens if a server is actually
+# live; honours BOARD_NO_AUTO_OPEN=1 for headless/CI/cron. The stale per-day
+# .opened-* stamps from #367 are swept so they don't accrete.
 if [ -n "${server_health}" ] && [ "${BOARD_NO_AUTO_OPEN:-0}" != "1" ]; then
-  today="$(date +%Y%m%d)"
-  open_stamp="${project_dir}/board/.opened-${today}"
-  if [ ! -f "${open_stamp}" ]; then
-    # Clear any prior day's stamps so the dir doesn't accrete.
-    rm -f "${project_dir}"/board/.opened-* 2>/dev/null
-    : > "${open_stamp}"
-    url="http://127.0.0.1:${server_port}"
-    if command -v open >/dev/null 2>&1; then open "${url}" >/dev/null 2>&1 &
-    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "${url}" >/dev/null 2>&1 &
-    fi
-    disown 2>/dev/null || true
+  rm -f "${project_dir}"/board/.opened-* 2>/dev/null
+  url="http://127.0.0.1:${server_port}"
+  if command -v open >/dev/null 2>&1; then open "${url}" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "${url}" >/dev/null 2>&1 &
   fi
+  disown 2>/dev/null || true
 fi
 
 # Build digest: counts by column + last shipped card (with relative time).
