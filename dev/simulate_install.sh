@@ -40,7 +40,7 @@ PROFILE="software"
 LIFECYCLE=0                         # opt-in (--lifecycle) synthetic demo card; hourly cards fly themselves
 LIFECYCLE_INTERVAL=2                # seconds between phases
 LEGACY_DISCOVER=0                   # 1 = use old discover.py (session-shaped)
-REPLAY_MODE="inline"                # "inline" = FREE main-Claude staging (default) · "haiku" = claude -p fly · "bulk" = no-API discover
+REPLAY_MODE="haiku"                 # haiku = claude -p fly (only engine; inline/discover retired, code kept dormant)
 HOURLY_MAX_BUCKETS=0                # 0 = all hours in --days window
 HOURLY_SHOW_LIFECYCLE=1             # 1 = play task→ip→done per card (the fly)
 HOURLY_BUCKET_MIN=30                # bucket size in minutes
@@ -131,13 +131,11 @@ if [[ -n "${HOURLY_DATE}" ]]; then
   echo "  (note: --date is ignored in sim==install mode; install always does the two-tier window)" >&2
 fi
 
-# Map the sim's --replay-mode to serve.py's --bootstrap-mode (sim == install):
-#   inline (default) → FREE main-Claude staging · haiku → claude -p · bulk → discover
+# Map the sim's --replay-mode to serve.py's --bootstrap-mode (sim == install).
+# haiku is the only engine now; inline/discover are retired → everything routes to haiku.
 case "$REPLAY_MODE" in
-  inline|"") BOOTSTRAP_MODE="inline" ;;
-  haiku|hourly) BOOTSTRAP_MODE="haiku" ;;
-  bulk|discover) BOOTSTRAP_MODE="discover" ;;
-  *) BOOTSTRAP_MODE="inline" ;;
+  haiku|hourly|"") BOOTSTRAP_MODE="haiku" ;;
+  *) echo "  ! --replay-mode '${REPLAY_MODE}' retired (inline/discover removed) — using haiku" >&2; BOOTSTRAP_MODE="haiku" ;;
 esac
 
 SERVE_ARGS=(--bootstrap

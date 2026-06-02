@@ -395,7 +395,7 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
                           days: int, bucket_min: int = 30,
                           chunk_size: int = 2,
                           harvest_root: Path | None = None,
-                          mode: str = "inline",
+                          mode: str = "haiku",
                           seed_if_empty: bool = False) -> None:
     """Background-thread worker: the HIGH-COMPUTE startup fill (card #265/#268).
 
@@ -439,9 +439,9 @@ def _stream_hourly_cards(project_root: Path, board_dir: Path, port: int,
     if seed_if_empty:
         base += ["--seed-cross-project-if-empty"]  # #285 never-empty day one
 
-    # INLINE (default, free): one fast pass over the whole window that stages
-    # extraction_pending.json — main Claude (the session the user is already in)
-    # emits the cards at no Haiku cost. No fly/tiering here: staging is instant.
+    # INLINE (retired — dormant): formerly staged extraction_pending.json for main
+    # Claude to emit at no Haiku cost. No longer selectable (--mode dropped 'inline'),
+    # so this branch is unreachable via the CLI; kept for reference/restore.
     if mode == "inline":
         print("inline bootstrap: staging extraction_pending.json (no Haiku)",
               file=sys.stderr)

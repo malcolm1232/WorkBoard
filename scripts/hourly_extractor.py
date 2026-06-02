@@ -613,10 +613,11 @@ def main():
                          + ",".join(SOURCES) +
                          " to TARGET (default: all). Excluded harvests are "
                          "skipped entirely. e.g. --sources jsonl,git")
-    ap.add_argument("--mode", choices=["haiku", "inline"], default="haiku",
-                    help="haiku = claude -p per chunk (costs usage); "
-                         "inline = stage extraction_pending.json for main Claude "
-                         "to emit (free, no Haiku, higher quality)")
+    ap.add_argument("--mode", choices=["haiku"], default="haiku",
+                    help="haiku = claude -p per chunk (costs usage). "
+                         "('inline' staging is retired — no longer selectable; the "
+                         "engine code in hourly_reconcile._emit_extraction_pending "
+                         "remains but is unreachable from the CLI)")
     ap.add_argument("--phase", type=str, default="",
                     help="#327 HUD fill-stage tag: replay (tier-1 watched) / "
                          "speedup (tier-2 backfill) / solo (single tier) / "
