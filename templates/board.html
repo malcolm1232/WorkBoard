@@ -156,21 +156,10 @@
     100% { opacity: 1; transform: translateX(0);    max-width: 320px; padding-left: 8px; padding-right: 8px; }
   }
   .column.sliding-in { animation: column-slide-in 400ms cubic-bezier(0.16, 1, 0.3, 1) both; overflow: hidden; }
-  /* #100 one-time post-fill reshuffle: cards lift into the air (shadow swells,
-     a hair of scale) while a FLIP transform slides them to their sorted slot,
-     then settle. The translate/scale is driven by inline transform from the JS
-     FLIP; this keyframe owns only the "lift" cues (shadow + brightness) so they
-     don't fight the inline transform. .reshuffling rides above its neighbours. */
-  @keyframes reshuffle-lift {
-    0%   { box-shadow: var(--shadow); filter: brightness(1); }
-    35%  { box-shadow: 0 16px 34px rgba(217,119,87,.40); filter: brightness(1.04); }
-    100% { box-shadow: var(--shadow); filter: brightness(1); }
-  }
-  .card.reshuffling { animation: reshuffle-lift 520ms ease both; position: relative; z-index: 30; }
   /* v4: accessibility — honor reduced-motion preference */
   @media (prefers-reduced-motion: reduce) {
     .card.popping-in, .card.removing, .card.pulsing, .column.sliding-in,
-    .card.flashing, .card.entering, .card.reshuffling,
+    .card.flashing, .card.entering,
     .card.active-work { animation: none !important; }
   }
   /* v2: live "↻ updated 12s ago" indicator in the header. Tick every 1s. */
@@ -3872,78 +3861,6 @@ function playEntrance() {
   _saveSeen(seen);
 }
 
-// ===== #100 one-time post-fill reshuffle (newest → oldest) =====
-// The fly-in appends cards in mining order (day-by-day), so a freshly-filled
-// column reads jumbled. ONCE — right after the pre-onboard fill completes — we
-// sort every column newest-first and play a FLIP "lift & reshuffle": each card
-// lifts (shadow swell + a hair of scale), slides to its sorted slot, settles.
-// Pure browser JS, zero tokens. A per-board localStorage guard means it fires
-// exactly once ever (never on refresh/reconnect); after this, normal live use
-// resumes (new cards just pop in at the top). The new order is persisted, so it
-// stays sorted. NOTE: render() still floats the active-work card to the top of
-// In Progress — this just sets the underlying newest-first order it pins over.
-function _reshuffleKey() {
-  const bid = (state && (state.id || state.title)) || location.pathname || 'board';
-  return 'wb:reshuffled::' + bid;
-}
-function _cardSortTs(c) {
-  const v = c && (c.createdAt || c.created_at);
-  const t = v ? Date.parse(v) : NaN;
-  return isNaN(t) ? 0 : t;
-}
-function sortColumnsNewestFirst() {
-  if (!state || !Array.isArray(state.cards)) return;
-  // render() filters per column preserving array order, so a single global
-  // newest-first sort makes every column newest-first. Tie-break on num desc.
-  state.cards.sort((a, b) => _cardSortTs(b) - _cardSortTs(a) || (b.num || 0) - (a.num || 0));
-}
-function reshuffleOnceAfterFill() {
-  if (!state || _view !== 'board') return;
-  let key = 'wb:reshuffled';
-  try { key = _reshuffleKey(); if (localStorage.getItem(key)) return; } catch (_) {}
-  // FIRST — record each card's current top before we reorder.
-  const first = new Map();
-  document.querySelectorAll('.card[data-card-id]').forEach(el => {
-    first.set(el.dataset.cardId, el.getBoundingClientRect().top);
-  });
-  // Mutate → persist → rebuild in sorted order (LAST).
-  sortColumnsNewestFirst();
-  scheduleSave();
-  render();
-  try { localStorage.setItem(key, '1'); } catch (_) {}   // one-shot, forever
-  // Skip the animation (but keep the sort) when it can't be seen or shouldn't run.
-  const reduce = (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)
-                 || document.hidden;
-  if (reduce) return;
-  const els = Array.from(document.querySelectorAll('.card[data-card-id]'));
-  // INVERT — jump each mover back to its old spot instantly (lifted a hair).
-  els.forEach(el => {
-    const f = first.get(el.dataset.cardId);
-    if (f == null) return;
-    const dy = f - el.getBoundingClientRect().top;
-    if (Math.abs(dy) < 2) return;             // didn't move — leave it be
-    el.style.transition = 'none';
-    el.style.transform = 'translateY(' + dy + 'px) scale(1.05)';
-  });
-  void document.body.offsetWidth;             // force one reflow so INVERT sticks
-  // PLAY — release to rest, staggered so the column cascades into order.
-  let i = 0;
-  els.forEach(el => {
-    if (!el.style.transform) return;          // only the movers
-    const delay = (i++) * 22;
-    el.classList.add('reshuffling');
-    el.style.animationDelay = delay + 'ms';   // sync the shadow-lift with the slide
-    el.style.transition = 'transform 520ms cubic-bezier(.2,.85,.25,1) ' + delay + 'ms';
-    el.style.transform = 'translateY(0) scale(1)';
-    el.addEventListener('transitionend', function te(ev) {
-      if (ev.propertyName !== 'transform') return;
-      el.style.transition = ''; el.style.transform = ''; el.style.animationDelay = '';
-      el.classList.remove('reshuffling');
-      el.removeEventListener('transitionend', te);
-    });
-  });
-}
-
 // ===== Tag colour + taxonomy lookup =====
 // Single source of truth for "what colour is this tag" used by card chips,
 // modal chips, and the legend popover. Taxonomy comes from board.json's
@@ -5706,12 +5623,7 @@ function startSSE() {
         // #327 — 'replay' (tier-1) finishing isn't the end: hand off to the
         // "speeding up" tier-2 instead of completing the HUD.
         if (d.phase === 'replay') BoardLoadHUD.handoff(d.label);
-        else {
-          BoardLoadHUD.done(d.label);
-          // #100 — fill is fully done; let the last pop-ins settle, then run the
-          // one-time newest→oldest lift-and-reshuffle (self-guards to once ever).
-          setTimeout(reshuffleOnceAfterFill, 900);
-        }
+        else BoardLoadHUD.done(d.label);
       } else BoardLoadHUD.update(d.done || 0, d.total || 0, d.label || '', d.phase || '');
     } catch (_) {}
   });
