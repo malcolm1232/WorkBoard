@@ -102,10 +102,10 @@ When you announce the board, use THIS exact shape — relay verbatim, don't pad:
    "estimated time to finish + recommended action" message — short and sweet).
 3. Then this block, exactly as written:
 
-A few things you can do from here:
-- Add more boards later by asking "open a new workboard for <project>" (e.g. Edu Platform or HFTAgents).
-- The board survives sessions — a digest gets auto-injected at each session start so it's never forgotten.
-- Just talk naturally as you work ("shipped X", "fixed Y", "what's left?") and cards move themselves.
+You're all set. A few things to know:
+- Add another board anytime — just say "open a new workboard for <project>".
+- It remembers. Close the tab, come back tomorrow — your board picks up right where you left off.
+- Just work normally. Say things like "shipped X", "fixed Y", or "what's left?" and the cards move themselves.
 
 What would you like to work on?
 
