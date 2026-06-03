@@ -3861,6 +3861,34 @@ function playEntrance() {
   _saveSeen(seen);
 }
 
+// ===== #101 one-time post-fill sort (newest on top, all columns) =====
+// The fly-in appends cards in mining order (day-by-day), so a freshly-filled
+// column reads jumbled. ONCE — right after the pre-onboard fill completes — sort
+// every column newest-first and persist it. No animation. A per-board
+// localStorage guard means it fires exactly once ever (never on refresh/
+// reconnect); after that, normal live use resumes (new cards land at top).
+// render() filters per column preserving array order, so one global sort makes
+// every column newest-first; it still floats the active-work card to the top of
+// In Progress over this base order.
+function _sortOnceKey() {
+  const bid = (state && (state.id || state.title)) || location.pathname || 'board';
+  return 'wb:sorted-once::' + bid;
+}
+function _cardSortTs(c) {
+  const v = c && (c.createdAt || c.created_at);
+  const t = v ? Date.parse(v) : NaN;
+  return isNaN(t) ? 0 : t;
+}
+function sortAllColumnsOnceAfterFill() {
+  if (!state || !Array.isArray(state.cards)) return;
+  let key = 'wb:sorted-once';
+  try { key = _sortOnceKey(); if (localStorage.getItem(key)) return; } catch (_) {}
+  state.cards.sort((a, b) => _cardSortTs(b) - _cardSortTs(a) || (b.num || 0) - (a.num || 0));
+  scheduleSave();
+  if (_view === 'board') render();
+  try { localStorage.setItem(key, '1'); } catch (_) {}   // one-shot, forever
+}
+
 // ===== Tag colour + taxonomy lookup =====
 // Single source of truth for "what colour is this tag" used by card chips,
 // modal chips, and the legend popover. Taxonomy comes from board.json's
@@ -5623,7 +5651,12 @@ function startSSE() {
         // #327 — 'replay' (tier-1) finishing isn't the end: hand off to the
         // "speeding up" tier-2 instead of completing the HUD.
         if (d.phase === 'replay') BoardLoadHUD.handoff(d.label);
-        else BoardLoadHUD.done(d.label);
+        else {
+          BoardLoadHUD.done(d.label);
+          // #101 — fill fully done; let the last card writes apply, then run the
+          // one-time newest-on-top sort across all columns (self-guards to once).
+          setTimeout(sortAllColumnsOnceAfterFill, 600);
+        }
       } else BoardLoadHUD.update(d.done || 0, d.total || 0, d.label || '', d.phase || '');
     } catch (_) {}
   });
