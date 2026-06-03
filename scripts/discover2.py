@@ -222,9 +222,12 @@ _NON_PROJECT_DIRS = {
     str(Path.home() / "Desktop"),
     "/",
 }
-# Whole subtrees that are scratch / demo / sandbox, never a real project (the
-# /tmp demo runs from --demo were polluting the picker). Prefix match.
-_NON_PROJECT_PREFIXES = ("/tmp", "/private/tmp", "/var/folders")
+# Whole subtrees that are scratch / demo / sandbox / tooling, never a real
+# project (the /tmp demo runs and ~/.claude meta-work were polluting the
+# picker). Prefix match.
+_NON_PROJECT_PREFIXES = ("/tmp", "/private/tmp", "/var/folders",
+                         str(Path.home() / ".claude"),
+                         str(Path.home() / ".board-steward"))
 
 
 def _is_non_project(cwd: str) -> bool:
