@@ -123,21 +123,21 @@ path<TAB>label):
 
 ${projects}
 
-ACTION (do this now, don't wait to be asked): FIRST print the question below as
-a normal chat line (plain markdown — it renders visibly), THEN call
-AskUserQuestion with the project options. The picker renders its own question
-title in a color that is invisible on some terminal themes, so the chat line
-above it is what the user actually reads; the picker's clickable options stay
-visible regardless. Use THIS question text verbatim in both places (no markdown
-bold/asterisks — literal ** renders invisible in the picker field):
+ACTION (do this now, don't wait to be asked): call AskUserQuestion with the
+project options below. Do NOT also print the question as a separate chat line —
+no double-ask. Put ALL meaning in the HEADER and OPTION labels/descriptions:
+those render on every terminal theme, whereas the picker's own question-title
+field is dim/near-invisible on some themes — so nothing essential may rely on it.
 
-  Which project should get your first WorkBoard? (You can add more later by asking to open a board for another project.)
-
-Header: "Project". Make each listed project an option: label = the project name,
-description = the FULL PATH + the "(ago, N sessions, N edits)" detail (e.g.
-"~/code/acme-api — 12m ago, 638 sessions, 500 edits"). Exactly
-one board on first run — they can add more later by asking "open a new workboard
-for <project>". If their project isn't listed, they can type its path.
+  question: "Which project should get your first WorkBoard?"
+  header:   "Project"   (always-visible chip — tells the user what they're choosing)
+  options:  one per listed project — label = the project name; description = the
+            FULL PATH + the "(ago, N sessions, N edits)" detail (e.g.
+            "~/code/acme-api — 12m ago, 638 sessions, 500 edits"). Append to the
+            FIRST option's description: "Your first board — add more later by
+            asking to open a board for another project." If their project isn't
+            listed, they can type its path.
+  (no markdown bold/asterisks in option text — literal ** renders oddly in the picker.)
 
 When they pick a project at PATH, create + open the board by running:
 
