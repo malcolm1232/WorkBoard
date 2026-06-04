@@ -186,7 +186,10 @@ HINT
   board_dir="${proj_root}/board"
   want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${board_dir}" "${hook_dir}" 2>/dev/null || echo 7891)"
   if [ -f "${serve_py}" ]; then
-    nohup python3 "${serve_py}" --project "${proj_root}" --port "${want_port}" --bootstrap \
+    # env -u CLAUDECODE: the bootstrap fill + its end-of-fill reconcile_sweep run
+    # as subprocesses of this server; unset CLAUDECODE so they take the autonomous
+    # Haiku path, not the in-session prose recon_pending path (#recon).
+    env -u CLAUDECODE nohup python3 "${serve_py}" --project "${proj_root}" --port "${want_port}" --bootstrap \
       >"${proj_root}/.board-server.log" 2>&1 </dev/null &
     disown 2>/dev/null || true
     # Wait for the server to bind + write board.json (bootstrap_board is sync).

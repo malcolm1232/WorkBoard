@@ -51,7 +51,10 @@ bootstrap_flag="--bootstrap"
 
 # Already serving on its port? Then there's nothing to spawn.
 if ! curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" >/dev/null 2>&1; then
-  nohup python3 "${serve_py}" --project "${proj_root}" --port "${want_port}" ${bootstrap_flag} \
+  # env -u CLAUDECODE: bootstrap fill + its end-of-fill reconcile_sweep are
+  # subprocesses of this server; unset so they take the Haiku path, not the
+  # in-session prose recon_pending path (#recon).
+  env -u CLAUDECODE nohup python3 "${serve_py}" --project "${proj_root}" --port "${want_port}" ${bootstrap_flag} \
     >"${proj_root}/.board-server.log" 2>&1 </dev/null &
   disown 2>/dev/null || true
   # Wait for bind + board.json (bootstrap_board writes synchronously).
