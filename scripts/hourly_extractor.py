@@ -725,6 +725,19 @@ def _run_window(project: Path, board: Path, card_py: Path, *,
                    show_lifecycle, pace_s, reconcile, phase=phase)
 
 
+def _reconcile_full_window(project: Path, board: Path, card_py: Path,
+                           off: int, days: int, sources, date_filter) -> None:
+    """ONE reconcile sweep over the FULL [off, off+days] window after BOTH tiers
+    have flown — instead of one sweep per tier. Cheaper (a single Haiku call) and
+    judges every tier's cards together. Harvests the same span the two tiers
+    covered (tier-1 [off,off+1] + tier-2 [off+1,off+days])."""
+    events = _flatten_events(project, off + days, sources=sources)
+    events = _filter_events(events, project, date_filter, off) or []
+    if not events:
+        return
+    reconcile_sweep(card_py, board, events)  # bootstrap scope (only_discovered=True)
+
+
 def run(project: Path, board: Path, port: int, days: int,
         show_lifecycle: bool, pace_s: float,
         max_buckets: int, workers: int = 8,
@@ -774,14 +787,21 @@ def run(project: Path, board: Path, port: int, days: int,
                   f"cover {days}d of work ending then (not an empty recent gap)",
                   file=sys.stderr)
         if days > 1:
+            # Both tiers extract+fly but DON'T reconcile; a single sweep runs at
+            # the very end over the full window (one Haiku call instead of two).
+            common_nr = {**common, "reconcile": False}
             _run_window(project, board, card_py, days=off + 1, end_days_ago=off,
                         show_lifecycle=True, pace_s=pace_s, phase="replay",
-                        seed_if_empty=seed_if_empty, **common)
+                        seed_if_empty=seed_if_empty, **common_nr)
             _run_window(project, board, card_py, days=off + days,
                         end_days_ago=off + 1,
                         show_lifecycle=True, pace_s=max(pace_s / 5, 0.0),
-                        phase="speedup", seed_if_empty=False, **common)
+                        phase="speedup", seed_if_empty=False, **common_nr)
+            if reconcile:
+                _reconcile_full_window(project, board, card_py, off, days,
+                                       sources, date_filter)
         else:
+            # Solo (single tier) already reconciles once — unchanged.
             _run_window(project, board, card_py, days=off + 1, end_days_ago=off,
                         show_lifecycle=True, pace_s=pace_s, phase="solo",
                         seed_if_empty=seed_if_empty, **common)
