@@ -76,6 +76,26 @@ def _bash_cmd(o: dict) -> str:
     return "\n".join(cmds)
 
 
+def _is_real_user(o: dict) -> bool:
+    """True for a genuine user PROMPT, not a tool_result. Claude Code records
+    tool results ALSO as type=='user', so naively resetting the per-turn window
+    on every type=='user' line would reset mid-turn on every tool call. A real
+    prompt's content is a plain string, or a list with a text block and NO
+    tool_result block."""
+    msg = o.get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        has_text = any(isinstance(b, dict) and b.get("type") == "text"
+                       for b in content)
+        has_tool_result = any(isinstance(b, dict)
+                              and b.get("type") == "tool_result"
+                              for b in content)
+        return has_text and not has_tool_result
+    return False
+
+
 def scan_transcript(path: Path) -> dict:
     """Tally this session's activity from its own transcript jsonl."""
     edits = 0
@@ -95,7 +115,15 @@ def scan_transcript(path: Path) -> dict:
                     continue
                 tp = o.get("type")
                 if tp == "user":
-                    user_turns += 1
+                    # Per-turn windowing (#385 Flaw 1): a real user prompt is a
+                    # NEW turn boundary, so reset the tallies — the backstop must
+                    # judge THIS turn's work, not the whole session's history
+                    # (which made it re-fire forever once any edit existed).
+                    if _is_real_user(o):
+                        user_turns += 1
+                        edits = 0
+                        ship_signals = 0
+                        card_actions = 0
                 elif tp == "assistant":
                     names = _tool_name(o)
                     if names:
@@ -151,10 +179,33 @@ def main() -> int:
     inprogress = [c for c in cards
                   if c.get("column") == "inprogress" and not c.get("doneAt")]
 
-    # Findings.
+    # Board-rev carding detection (#385 Flaw 2). The robust "did this turn touch
+    # the board?" signal: did board.json's rev advance since the last Stop? This
+    # is IMMUNE to how card.py was invoked (`$VAR`/alias/wrapper all evade the
+    # brittle "card.py add" substring match). Baseline persists per-board across
+    # turns AND sessions; the first encounter just seeds it (can't judge a delta
+    # with no baseline, so we don't block that one turn).
+    cur_rev = board.get("rev")
+    state_path = board_path.parent / ".stop_recon_state.json"
+    try:
+        prev_rev = json.loads(state_path.read_text()).get("rev")
+    except Exception:
+        prev_rev = None
+    try:
+        state_path.write_text(json.dumps({"rev": cur_rev}))
+    except OSError:
+        pass
+    rev_advanced = (isinstance(cur_rev, int) and isinstance(prev_rev, int)
+                    and cur_rev > prev_rev)
+    # Carded if the board actually changed (rev) OR a literal marker was seen
+    # (belt-and-suspenders). Seeding turn (no prior baseline) counts as carded
+    # so we never false-block before the baseline exists.
+    carded = rev_advanced or act["card_actions"] > 0 or prev_rev is None
+
+    # Findings — windowed to THIS turn (act) + state-based carding.
     uncarded_risk = (
         (act["ship_signals"] > 0 or act["edits"] >= EDIT_THRESHOLD)
-        and act["card_actions"] == 0
+        and not carded
     )
     # Nothing worth surfacing → stay silent (don't nag on a read-only session).
     if not uncarded_risk and not inprogress:
