@@ -133,6 +133,36 @@ Every board is **isolated and self-routing**:
 
 ---
 
+## Reconciliation (keeping the board factually correct)
+
+The board is only useful if it's a **faithful mirror of reality**. Reconciliation is the process that keeps it honest — it's bidirectional truth-making, four moves:
+
+1. **In-Progress → Done** when the activity shows the work actually shipped (the "*the card sat In-Progress for ages but it was all done*" case — the **most common drift**).
+2. **Surface MANDATORY/IMPORTANT** — anything flagged urgent/critical/must/p0/blocker that never got prioritized → the `mandatory` column. This is the **star**: never silently lose an important point.
+3. **Capture un-carded work** — substantive edits/commits that never became a card at all.
+4. **Demote abandoned** — "skip/nvm/defer/later" → `backlog`; stale-untouched (>24h, no follow-up) → `backlog`. The board shouldn't imply work is live when it isn't.
+
+### Two complementary layers
+
+- **Live carding backstop — the Stop hook** (`_hook_stop_recon.py`). Cheap, **no LLM**. On sign-off it checks: did this turn ship work (edits/commits) but run no `card.py`? If so it *blocks* and says "card it now." This is the in-the-moment guarantee for **move 3** (net-new un-carded work). Always on, ~free.
+- **Smart reconciliation — Haiku** (`hourly_reconcile.reconcile_sweep`). A `claude -p --model haiku` pass that reads the recent activity and applies **moves 1, 2, 4** to existing cards, animating them on the live board. Runs at **two triggers**:
+  - **Bootstrap** — after the initial history-mine fills the board (post-extraction sweep).
+  - **SessionStart** — `hourly_extractor --reconcile-only`, spawned **detached** so the digest stays instant. Reconciles *every* non-done card (`only_discovered=False`) against the activity since the last recon.
+
+### Why these triggers (not others)
+
+- **End-of-session is unreliable** — users just close the terminal, so a Stop-time smart pass would often never run. SessionStart catches the *previous* session's drift before the user starts the next one.
+- **Mid-session is too costly** — re-running a Haiku pass every few turns burns tokens for no clear gain.
+- So the smart pass lives at **SessionStart + Bootstrap**, and the cheap blocking backstop lives at **Stop**.
+
+### Why Haiku, and the cost gates
+
+The smart pass uses **Haiku**, not the in-session (Sonnet) main agent: Haiku is far cheaper, which matters because **free users have a minimal token budget** (Max users have ~1M). It uses the user's existing Claude login — no API key. SessionStart recon is **gated** so it never burns a call needlessly: it fires only when (a) there are non-done cards AND (b) there's new project activity since the last recon (tracked in `board/.recon_state.json`). A quick re-open with nothing new costs nothing.
+
+`# Pending:` SessionStart recon is reconcile-*only* (moves existing cards). Catching net-new un-carded *important* work at SessionStart (an extract pass over the gap) is deferred — the Stop backstop covers net-new live for now.
+
+---
+
 ## Operating rules (Claude reads this every session)
 
 These are durable, project-level instructions. Claude follows them on every turn while working in this repo or anything under `~/Desktop/`.
@@ -192,11 +222,11 @@ If you find yourself responding to a substantive prompt without having read thes
    │   │   ├── serve.py                runtime: handler · routes · SSE · _run_server
    │   │   └── serve_bootstrap.py      bootstrap a board + discovery→card mapping
    │   │
-   │   ├── hourly_*                    ── BRANCH: history-extraction pipeline (acyclic) ──
+   │   ├── hourly_*                    ── BRANCH: history-extraction + reconciliation pipeline (acyclic) ──
    │   │   ├── hourly_common.py        shared helpers (bottom of the chain)
-   │   │   ├── hourly_extractor.py     orchestration: bucket → chunk → run
+   │   │   ├── hourly_extractor.py     orchestration: bucket → chunk → run; also --reconcile-only (SessionStart smart-recon, gated, .recon_state.json)
    │   │   ├── hourly_emit.py          emit ONE card
-   │   │   └── hourly_reconcile.py     post-pass reconciliation sweep
+   │   │   └── hourly_reconcile.py     Haiku reconcile sweep (only_discovered flag) — runs at BOOTSTRAP + SessionStart
    │   │
    │   ├── discover2.*                 ── BRANCH: heuristic harvest ──
    │   │   ├── discover2.py            entry
