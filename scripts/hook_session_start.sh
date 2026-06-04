@@ -135,7 +135,7 @@ bold/asterisks — literal ** renders invisible in the picker field):
 
 Header: "Project". Make each listed project an option: label = the project name,
 description = the FULL PATH + the "(ago, N sessions, N edits)" detail (e.g.
-"/Users/malco/Desktop/WorkBoard — 12m ago, 638 sessions, 500 edits"). Exactly
+"~/code/acme-api — 12m ago, 638 sessions, 500 edits"). Exactly
 one board on first run — they can add more later by asking "open a new workboard
 for <project>". If their project isn't listed, they can type its path.
 

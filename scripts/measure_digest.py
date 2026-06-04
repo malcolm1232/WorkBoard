@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """measure_digest.py — #299 DIGEST-COMPACT measurement harness.
 
-Harvests the real /Users/malco activity, buckets it exactly as the production
-path does, and reports:
+Harvests the real $HOME (or --project) activity, buckets it exactly as the
+production path does, and reports:
   1. baseline vs compacted token/char totals (same-harvest A/B) + safety checks
   2. per-SOURCE token contribution (jsonl / convo / git / memory / plans / …),
      so each stream's cost is identifiable and exportable.
@@ -33,7 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hourly_extractor as HE
 import digest_compact
 
-PROJECT = Path("/Users/malco")
+# Dev-only measurement harness. The project whose history we harvest defaults to
+# the current user's home (was a hardcoded absolute home path — broke for others).
+# Override with --project PATH or $BOARD_MEASURE_PROJECT.
+PROJECT = Path(os.environ.get("BOARD_MEASURE_PROJECT") or Path.home()).expanduser()
+# Digest dumps land in THIS repo's board/ dir, not a hardcoded user path.
+OUT_DIR = Path(__file__).resolve().parent.parent / "board"
 
 
 def harvest(days: int):
@@ -117,9 +122,16 @@ def diff_report(days: int, base: str, comp: str, events: list) -> None:
 
 
 def main():
+    global PROJECT
     args = [a for a in sys.argv[1:]]
     diff_mode = "--diff" in args
     args = [a for a in args if a != "--diff"]
+    # --project PATH overrides the harvested project (default: $HOME / env).
+    if "--project" in args:
+        i = args.index("--project")
+        if i + 1 < len(args):
+            PROJECT = Path(args[i + 1]).expanduser()
+            del args[i:i + 2]
     days = int(args[0]) if args else 2
     events, buckets = harvest(days)
 
@@ -174,7 +186,8 @@ def main():
     print(f"  lossless (compacted lines not byte-identical in baseline): {len(notfound)}")
     print(f"  hard-gate (protected USER/COMMIT/edited/MEMORY/PLAN dropped): "
           f"{sum(bp[l]-cp[l] for l in bp if bp[l] > cp[l])}")
-    bdir = PROJECT / "Desktop/WorkBoard/board"
+    bdir = OUT_DIR
+    bdir.mkdir(parents=True, exist_ok=True)
     (bdir / f"_digest_base_{days}d.txt").write_text(base)
     (bdir / f"_digest_comp_{days}d.txt").write_text(comp)
     print(f"--- digests written → board/_digest_base_{days}d.txt + _comp_{days}d.txt ---")

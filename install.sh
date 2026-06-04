@@ -169,8 +169,16 @@ if [ "$DO_SKILL" = "1" ]; then
     warn "skill dir exists and is not a symlink — leaving it as-is: ${SKILL_DIR}"
   else
     mkdir -p "$(dirname "$SKILL_DIR")"
-    ln -sfn "$REPO" "$SKILL_DIR"
-    ok "skill linked → ${SKILL_DIR}"
+    if ln -sfn "$REPO" "$SKILL_DIR" 2>/dev/null && [ -L "$SKILL_DIR" ]; then
+      ok "skill linked → ${SKILL_DIR}"
+    else
+      # Symlinks need admin/Developer Mode on Windows (Git Bash) — fall back to a
+      # plain copy so install still works. Note: a copy won't auto-track repo
+      # edits; re-run install.sh after pulling updates.
+      rm -rf "$SKILL_DIR" 2>/dev/null || true
+      cp -R "$REPO" "$SKILL_DIR"
+      ok "skill copied → ${SKILL_DIR} (symlink unavailable; re-run install.sh to update)"
+    fi
   fi
 else
   warn "skipping skill install (--skip-skill)"
