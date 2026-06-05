@@ -17,6 +17,12 @@ session's own transcript (transcript_path) — so it's fast and can't hang on a
      session → work likely went un-tracked.
   2. OPEN IN-PROGRESS — cards still in inprogress at sign-off (gentle reminder
      to confirm done or leave a note).
+  3. BATCHED-NOT-LIVE (#74) — cards that reached Done in this window with NO
+     real in-flight dwell: born in Task but jumped straight to Done (never
+     inprogress) or sat <BATCH_DWELL_SEC in inprogress. This is the
+     add→done collapse the rev/marker checks are structurally blind to (a
+     batched card still advances rev and runs card.py). NON-BLOCKING — it
+     just surfaces the smell so live-carding self-corrects (VISION law #3).
 
 When something is found it writes board/recon_pending.json (the existing schema,
 tagged source=stop_recon) so the NEXT SessionStart surfaces it and the next main
@@ -34,6 +40,7 @@ EDIT_THRESHOLD = 3          # this many edits w/ no card = uncarded-work signal
 SHIP_RE_WORDS = ("git commit", "shipped", "deployed", "merged", "git push")
 CARD_MARKERS = ("card.py add", "card.py move", "card.py fly", "card.py improve",
                 "card.py bug", "card.py auto-ship", "card.py subtask")
+BATCH_DWELL_SEC = 30        # <this in inprogress = no real in-flight time (#74)
 
 
 def find_board(start: Path) -> Path | None:
@@ -153,6 +160,46 @@ def load_board(board_path: Path) -> dict:
         return {}
 
 
+def _iso(s):
+    """Parse an ISO timestamp (tolerating a trailing Z) → datetime, or None."""
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def detect_batched(cards: list, since) -> list:
+    """Cards that reached Done with no real in-flight dwell — the batched-not-live
+    smell (#74). A card is batched if it was BORN in Task (live work, not a
+    bootstrap/discovered seed that's born in Done) and then either jumped
+    straight to Done without ever passing through inprogress, or sat in
+    inprogress < BATCH_DWELL_SEC. Scoped to cards finished at/after `since` (the
+    previous Stop), so old cards aren't re-flagged every session. `since` None
+    (no baseline yet) → return [] (can't judge a window without one)."""
+    if since is None:
+        return []
+    out = []
+    for c in cards:
+        if c.get("column") != "done":
+            continue
+        hist = c.get("history") or []
+        if not hist or hist[0].get("to") == "done":
+            continue                      # born into Done = historical seed, skip
+        done_evt = next((h for h in reversed(hist) if h.get("to") == "done"), None)
+        done_at = _iso(done_evt["at"]) if done_evt else _iso(c.get("doneAt"))
+        if not done_at or done_at < since:
+            continue                      # finished before this window (or undatable)
+        ip_evt = next((h for h in hist if h.get("to") == "inprogress"), None)
+        if ip_evt is None:
+            out.append((c, "never In-Progress (Task→Done jump)"))
+            continue
+        ip_at = _iso(ip_evt.get("at"))
+        if ip_at and (done_at - ip_at).total_seconds() < BATCH_DWELL_SEC:
+            dwell = int((done_at - ip_at).total_seconds())
+            out.append((c, f"only {dwell}s in In-Progress"))
+    return out
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -186,15 +233,23 @@ def main() -> int:
     # turns AND sessions; the first encounter just seeds it (can't judge a delta
     # with no baseline, so we don't block that one turn).
     cur_rev = board.get("rev")
+    now_iso = datetime.now(timezone.utc).isoformat()
     state_path = board_path.parent / ".stop_recon_state.json"
     try:
-        prev_rev = json.loads(state_path.read_text()).get("rev")
+        _prev = json.loads(state_path.read_text())
+        prev_rev = _prev.get("rev")
+        prev_at = _iso(_prev.get("at"))
     except Exception:
-        prev_rev = None
+        prev_rev, prev_at = None, None
     try:
-        state_path.write_text(json.dumps({"rev": cur_rev}))
+        state_path.write_text(json.dumps({"rev": cur_rev, "at": now_iso}))
     except OSError:
         pass
+
+    # Batched-not-live smell (#74): cards Done this window with no in-flight
+    # dwell. Advisory only — never blocks (a batched card is correct end-state,
+    # just not live-tracked); surfacing it is what makes the miss self-correct.
+    batched = detect_batched(cards, prev_at)
     rev_advanced = (isinstance(cur_rev, int) and isinstance(prev_rev, int)
                     and cur_rev > prev_rev)
     # Carded if the board actually changed (rev) OR a literal marker was seen
@@ -208,7 +263,7 @@ def main() -> int:
         and not carded
     )
     # Nothing worth surfacing → stay silent (don't nag on a read-only session).
-    if not uncarded_risk and not inprogress:
+    if not uncarded_risk and not inprogress and not batched:
         return 0
 
     reasons = []
@@ -218,6 +273,15 @@ def main() -> int:
             f"{act['ship_signals']} ship-signal(s) (commit/push/'shipped') but "
             f"ran NO card.py add/move/fly — substantive work may be un-carded. "
             f"Create cards for it (Task→In-Progress→Done) per SKILL.md §E/§J."
+        )
+    if batched:
+        bl = ", ".join(f"#{c.get('num')} ({why})" for c, why in batched[:8])
+        reasons.append(
+            f"{len(batched)} card(s) reached Done with no live in-flight tracking "
+            f"this session ({bl}) — the batched (add→done) smell, not live "
+            f"task→In-Progress→done. Not an error; a nudge to declare work UP "
+            f"FRONT next time (card + `fly inprogress` BEFORE editing) per "
+            f"SKILL.md 'The three laws' (law #1)."
         )
     if inprogress:
         ip = ", ".join(f"#{c.get('num')} {c.get('code') or c.get('title','')[:30]}"
@@ -244,6 +308,8 @@ def main() -> int:
         "reasons": reasons,
         "inprogress": [{"num": c.get("num"), "title": c.get("title"),
                         "code": c.get("code")} for c in inprogress],
+        "batched": [{"num": c.get("num"), "title": c.get("title"),
+                     "why": why} for c, why in batched],
     }
     try:
         (board_path.parent / "recon_pending.json").write_text(

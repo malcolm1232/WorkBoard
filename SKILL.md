@@ -41,9 +41,11 @@ removed because it jumped. **No "want me to add a card?" prompt — just do it.*
    can still be fully batched; that post-hoc collapse is the exact miss this kills.
 2. **One pulse at a time.** Exactly one card `inprogress` (the coral halo). Many units may wait in
    Task, but only the one you're actively coding is lit.
-3. **The Stop hook can't see batching.** It checks "was it carded *at all*," not "carded *live*" — a
-   20-second `add→done` cluster passes it (rev advanced, `card.py` ran). The net catches net-new
-   un-carded work, not late carding. The live timing is on you, not the hook.
+3. **The Stop hook flags batching — but only after the fact (#74).** On sign-off it now checks each
+   card Done this session for in-flight dwell; an `add→done` cluster with no real `inprogress` time
+   is surfaced as a "batched-not-live" smell. It does **not block** (the end-state *is* correct,
+   just not live-tracked) — it's a mirror, not a gate. Declaring up front (law #1) is still 100% on
+   you; the hook only makes the miss visible the next session so it self-corrects.
 
 ### Shape → pattern (match the incoming work, then card it that way)
 
