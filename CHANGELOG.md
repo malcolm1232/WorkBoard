@@ -9,6 +9,28 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.8 — LIVE-protocol de-dilution + live-carding enforcement (2026-06-05)
+- **SKILL.md LIVE section de-diluted (#73, `7317709`)** — replaced the generic
+  7-step `add→fly` list with **three laws** (declare-don't-record · one-pulse-at-a-
+  time · the Stop hook can't gate batching) + a **shape→pattern table** covering all
+  five work shapes (single unit / multiple to-dos / plan mode / phase-tier / mid-task
+  branch). Derived from 5 parallel simulations of the proper-carding outcome.
+- **Stop hook: batched-not-live detector (#74, `31ab943`)** — `detect_batched()`
+  flags cards that reached Done this session with no in-flight dwell (Task→Done jump,
+  or <30s in In-Progress), using `card.history` events and scoped to the window since
+  the last Stop. **Non-blocking** advisory — surfaces the add→done smell the rev/marker
+  checks were structurally blind to. Paired SKILL.md Law #3 rewrite.
+- **card-before-edit PreToolUse WARN hook (#75, `9683820`)** — new
+  `_hook_card_before_edit.py`: on an edit inside a board project with NO In-Progress
+  card, injects a non-blocking `additionalContext` reminder to declare the unit first
+  (law #1). Never blocks; conservative + 60s-debounced. Wired into `hooks.json`,
+  `install_hooks.py` (in the `all`/`live` set; `--uninstall` removes it), `clean_slate.sh`
+  (+ the previously-uncleaned `.stop_recon_state.json` sidecar), and BOOTSTRAP.md.
+- **SKILL.md #5 clarified as the explicit exception (#76, `aa3a373`)** — the mid-task
+  branch row now states up front it's the one shape where new work nests as a *subtask*,
+  not a new card (resolving the apparent contradiction with the "new work = new card" rows).
+- Module invariant: 33 → **34** script modules (the new hook leaf), all import-clean, no cycles.
+
 ### Changed — autonomous fill is the default (2026-05-31)
 - **`--bootstrap-mode` / `install.sh --fill` default flipped `inline → haiku`** —
   a fresh install now fills the board **autonomously** (no main-Claude step), the
