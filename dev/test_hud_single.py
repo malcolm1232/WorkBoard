@@ -38,9 +38,14 @@ def _hud(page):
       const q = s => (h.querySelector(s)||{}).textContent || '';
       const cs = getComputedStyle(h);
       const vis = s => { const e = h.querySelector(s); return !!e && getComputedStyle(e).display !== 'none'; };
+      // bar fill width as a fraction of the track — indeterminate sweep pins the
+      // fill to ~35%, a "loaded" bar to ~100%.
+      const fill = h.querySelector('#lh-fill'), track = h.querySelector('.lh-track');
+      const fillRatio = (fill && track && track.offsetWidth) ? fill.offsetWidth / track.offsetWidth : 0;
       return {present:true, display: h.style.display, visible: cs.display !== 'none',
               done: q('#lh-done'), total: q('#lh-total'), pct: q('#lh-pct'),
               countVisible: vis('.lh-count'), pctVisible: vis('.lh-pct'),
+              fillRatio,
               mode: q('#lh-mode'), status: q('.lh-status b'),
               window: q('#lh-window')};
     }""")
@@ -169,6 +174,9 @@ def main():
             check(not last_sp["countVisible"], "count hidden the instant we enter reconcile (no stale N/N)")
             check(not rec0["countVisible"] and not rec0["pctVisible"],
                   "no N/M and no % shown during reconcile sweep")
+            # indeterminate "loading" bar (a sweeping segment), NOT a static full bar
+            check(rec0["fillRatio"] < 0.6,
+                  f"reconcile shows an indeterminate (partial) bar, not full (fillRatio={rec0['fillRatio']:.2f})")
             shot("3_reconcile")
             check(completes["n"] == 0, "still no COMPLETE during reconcile start")
 
@@ -177,6 +185,8 @@ def main():
             shot("4_complete")
             check(not rec1["countVisible"] and not rec1["pctVisible"],
                   "reconcile completes number-free (no 1/1 on ✓ COMPLETE)")
+            check(rec1["fillRatio"] > 0.9,
+                  f"bar fully loads on reconcile completion (fillRatio={rec1['fillRatio']:.2f})")
             check("COMPLETE" in (rec1.get("status") or ""), "shows ✓ COMPLETE on final")
             check(completes["n"] == 1, f"COMPLETE appeared exactly once (saw {completes['n']})")
             check(not ever_hidden["v"], "HUD NEVER hid mid-flow (single coherent HUD)")
