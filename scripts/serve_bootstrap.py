@@ -80,6 +80,7 @@ _GITIGNORE_ENTRIES = (
     "board/index.json",
     "board/extraction_snapshot.json",
     "board/recon_pending.json",
+    "board/.replay_state.json",
 )
 
 

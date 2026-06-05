@@ -383,6 +383,62 @@ def _write_last_recon_ms(board: Path, ms: int) -> None:
         pass
 
 
+# ---------- Card-replay gate (#recon-after-replay) ----------
+# The single source of truth for "is the bootstrap fly-in of the past N days
+# still streaming in?". Reconcile must NOT fire while a replay is in progress —
+# a recon pass racing the fill is what made cards "jump all over the place"
+# (two reconciles + live emits hitting the board at once). All reconcile entry
+# points gate on `completed_card_replay`: the end-of-replay sweep runs exactly
+# ONCE, the moment the LAST tier finishes; the SessionStart recon-only pass
+# stands down entirely while a replay is live. Default-open: a board that never
+# went through a tier-fly bootstrap (no state file) reconciles as before.
+
+def _replay_state_path(board: Path) -> Path:
+    return board.parent / ".replay_state.json"
+
+
+def _mark_replay_started(board: Path, n_days: int) -> None:
+    """Open the gate's 'in progress' state: completed_card_replay = 0. Called
+    at the top of the tier-fly bootstrap, before any card flies in."""
+    try:
+        _replay_state_path(board).write_text(json.dumps({
+            "completed_card_replay": 0,
+            "n_days": int(n_days),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }))
+    except OSError:
+        pass
+
+
+def _mark_replay_complete(board: Path) -> None:
+    """Flip completed_card_replay → 1 once the LAST replay tier has finished
+    emitting. Only after this does reconcile run."""
+    p = _replay_state_path(board)
+    try:
+        state = json.loads(p.read_text()) if p.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    state["completed_card_replay"] = 1
+    state["completed_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        p.write_text(json.dumps(state))
+    except OSError:
+        pass
+
+
+def _replay_complete(board: Path) -> bool:
+    """True when reconcile is allowed: either no replay is tracked for this
+    board (default-open) or the tracked replay has finished. False ONLY while a
+    replay is actively streaming (state file exists with the flag still 0)."""
+    p = _replay_state_path(board)
+    if not p.exists():
+        return True
+    try:
+        return bool(json.loads(p.read_text()).get("completed_card_replay", 1))
+    except (OSError, json.JSONDecodeError):
+        return True
+
+
 def _has_nondone_cards(board: Path) -> bool:
     """True if any non-banner card sits in a reconcilable (non-done) column."""
     try:
@@ -404,6 +460,15 @@ def _run_reconcile_only(project: Path, board: Path) -> None:
     un-carded work is the Stop hook's job."""
     card_py = Path(__file__).resolve().parent / "card.py"
     if not card_py.exists():
+        return
+
+    # Gate 0 (#recon-after-replay): a bootstrap fly-in is still streaming the
+    # past-N-days card replay → stand down. Reconciling now would race the fill's
+    # live emits (the "cards jumped all over the place" report). The replay's own
+    # end-of-replay sweep covers this window; this pass resumes next session once
+    # completed_card_replay == 1.
+    if not _replay_complete(board):
+        print("recon-only: card replay in progress — skip", file=sys.stderr)
         return
 
     # Gate A: nothing to reconcile → no harvest, no Haiku.
@@ -778,13 +843,16 @@ def run(project: Path, board: Path, port: int, days: int,
         # recent work day) + tier-2 [now-7,now-6] (older day) = work over the
         # 7d-ago→5d-ago span. off=0 reduces to the legacy now-anchored windows.
         off = _anchor_offset_days(project)
+        # Gate (#recon-after-replay): completed_card_replay = 0 for the whole
+        # fly-in. NO tier reconciles mid-replay (reconcile=False on every
+        # window) — a recon racing the live emits is what made cards shuffle.
+        # The single sweep runs below, ONCE, only after the gate flips to 1.
+        _mark_replay_started(board, days)
         if off:
             print(f"  anchor: last session ~{off}d ago → fly window slides to "
                   f"cover {days}d of work ending then (not an empty recent gap)",
                   file=sys.stderr)
         if days > 1:
-            # Tier-1 'replay' NEVER reconciles (it hands off to 'speedup'); only
-            # the final 'speedup' tier runs the single reconcile sweep.
             _run_window(project, board, card_py, days=off + 1, end_days_ago=off,
                         show_lifecycle=True, pace_s=pace_s, phase="replay",
                         seed_if_empty=seed_if_empty, reconcile=False, **common)
@@ -792,11 +860,25 @@ def run(project: Path, board: Path, port: int, days: int,
                         end_days_ago=off + 1,
                         show_lifecycle=True, pace_s=max(pace_s / 5, 0.0),
                         phase="speedup", seed_if_empty=False,
-                        reconcile=reconcile, **common)
+                        reconcile=False, **common)
         else:
             _run_window(project, board, card_py, days=off + 1, end_days_ago=off,
                         show_lifecycle=True, pace_s=pace_s, phase="solo",
-                        seed_if_empty=seed_if_empty, reconcile=reconcile, **common)
+                        seed_if_empty=seed_if_empty, reconcile=False, **common)
+
+        # Replay of the past N days is COMPLETE → flip the gate, then reconcile
+        # EXACTLY ONCE against the whole replay span (not just the last tier's
+        # older slice — so an In-Progress→Done that shipped on the most recent
+        # day is still caught). This is the literal `if completed_card_replay:
+        # reconcile` the user asked for.
+        _mark_replay_complete(board)
+        if reconcile:
+            events = _flatten_events(project, off + days, sources=sources)
+            events = _filter_events(events, project, date_filter, off) or []
+            if events:
+                n_moved = reconcile_sweep(card_py, board, events)
+                print(f"✓ end-of-replay reconcile: moved {n_moved} card(s)",
+                      file=sys.stderr)
         return
 
     # Single pass — inline staging, or an explicit non-tier haiku run.
