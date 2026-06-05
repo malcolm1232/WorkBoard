@@ -23,31 +23,42 @@ user asks "did we do X?", reach for `card.py` / the digest, not recall.
 
 ## The LIVE lifecycle — card every unit of work (the spine)
 
-> **The card unit is the work, not the turn.** File a card when a *unit of work* starts, gets
-> decided, or ships — where a unit is something a future you (or the user) would reference by
-> `#` or grep for in `git log`. One unit usually spans many turns (ask → ask back → build →
-> review → ship), all under one `#`. One turn produces *many* cards only when the user names
-> many distinct units.
->
-> **Before opening a card, test:** *Will I/the user reference this by `#` later?* → file. *Part
-> of an existing card's lifecycle?* → `subtask add` / `fly`, don't open a new one. *Clarifying
-> intent before any work?* → no card yet; open when work starts. *Conversational micro-turn
-> ("yes", "stop", "rerun", "open the board")?* → no card.
+> **The card unit is the work, not the turn.** File when a *unit* starts, gets decided, or ships
+> — something you/the user would later reference by `#` or grep in `git log`. One unit spans many
+> turns (ask → build → review → ship) under one `#`. **Before opening:** referenced by `#` later?
+> → file. Part of an existing card's life? → `subtask` / `fly`, don't open new. Clarifying intent
+> before any work? → no card yet. Micro-turn ("yes", "rerun", "open the board")? → no card.
 
-When the user gives a substantive task, drive its card through these stages — **no "want me to
-add a card?" prompt, just do it.** Use **`fly`** for every cross-column hop: `card.py fly <num>
-<col>` mutates data AND asserts the animation contract (~320ms glide + 400ms pause so chained
-flies don't race the browser). It takes side-effect flags (`--bug`, `--improve`, `--subtask`,
-`--note`, `--writeup`/`--writeup-stdin`). **`fly` is the ONLY column-change verb** — the old
-`move` was removed because it jumped (mutated data with no animation); a card must never jump.
+**`fly` is the ONLY column-change verb** — `card.py fly <num> <col>` mutates data AND asserts the
+animation contract (~320ms glide + 400ms pause so chained flies don't race the browser). Side-effect
+flags: `--note`, `--writeup`/`--writeup-stdin`, `--subtask`, `--bug`, `--improve`. The old `move` was
+removed because it jumped. **No "want me to add a card?" prompt — just do it.**
 
-1. **On receipt** — `card.py add --column task --title "<verb + noun>" --priority <c|m|l> --origin "<user's exact phrasing>"`. Card pops into Task.
-2. **On start** — `card.py fly <num> inprogress` the moment work begins. Coral active-work halo pulses.
-3. **On scope expansion / new finding mid-task** — `card.py subtask add <num> "<the new step>"`. Subtasks tree out *inside* the card; the parent never leaves In Progress while children pend.
-4. **On a transient blocker** — `card.py fly <num> blocked --note "<reason>"`. Fly back to `inprogress` when unblocked.
-5. **On ship** — `card.py fly <num> done --writeup "<paragraph: commits, files, verification>"`. Card glides to the top of Done's today-group.
-6. **On regression after ship** — `card.py fly <num> inprogress --bug "<what broke>"`. Flies back with the `bug` tag + a new open `🐞 fix bug: <reason>` subtask; the next `fly done` closes it, leaving permanent evidence of the cycle.
-7. **On enhancement after ship** — `card.py fly <num> inprogress --improve "<what's added>"`. Same flow, no bug tag.
+### The three laws (the front of the lifecycle is 100% discipline — nothing enforces it)
+
+1. **Declare, don't record.** The card exists *and* is `fly inprogress` **before the first edit** —
+   never `add`+`done` in one breath at session end. A board where every commit has a neat done-card
+   can still be fully batched; that post-hoc collapse is the exact miss this kills.
+2. **One pulse at a time.** Exactly one card `inprogress` (the coral halo). Many units may wait in
+   Task, but only the one you're actively coding is lit.
+3. **The Stop hook can't see batching.** It checks "was it carded *at all*," not "carded *live*" — a
+   20-second `add→done` cluster passes it (rev advanced, `card.py` ran). The net catches net-new
+   un-carded work, not late carding. The live timing is on you, not the hook.
+
+### Shape → pattern (match the incoming work, then card it that way)
+
+| Shape | Pattern |
+|---|---|
+| **Single unit** | 1 card: `add` → `fly inprogress` (before editing) → `fly done --writeup`. The atomic template the others compose from. |
+| **Multiple to-dos in one message** | `add` **all N up front** into Task (so none gets buried — the VISION "task 5 forgotten" case) → fly them `inprogress`→`done` **one at a time**; never light two pulses at once. |
+| **Plan mode (multi-step plan)** | 1 **parent** card + `subtask add` per step; fly parent `inprogress`, `subtask done <n> <sid>` at each commit, `fly done` once after final verify — *not* one done-card per step (that shows "done" while the build is half-built). |
+| **Phase / tier effort** | 1 card **per tier**, carded task→IP→done **before the next tier's card exists** (one in flight). Optional thin **epic** parked in `backlog` as a link hub, never IP'd. A discovery inside a tier → `subtask add` of that tier, not a new sibling. |
+| **Mid-task branch** | Parent **stays `inprogress`**; `subtask add <n> "<finding>" --parent <sid>` the instant a blocker trees out (1→1.1→1.1.1), *before* acting on it; unwind leaf-first, parent `fly done` last. Use `blocked` only for an external hand-off — it drops the pulse, which is how deep branches get forgotten. |
+
+### After ship
+- **Regression** → `card.py fly <num> inprogress --bug "<what broke>"` — re-flies with the `bug` tag +
+  a new open `🐞 fix bug: <reason>` subtask; the next `fly done` closes it, leaving permanent cycle evidence.
+- **Enhancement** → `card.py fly <num> inprogress --improve "<what's added>"` — same flow, no bug tag.
 
 **Two layers of truth:** card **column = goal state** (is the high-level goal shipped); **subtasks
 = work-cycle history** (one open-then-closed subtask per ship/bug/improve cycle — `☑ initial ship`
