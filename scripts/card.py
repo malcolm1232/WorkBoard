@@ -150,6 +150,8 @@ def build_parser():
                      help="read writeup from stdin (e.g. heredoc)")
     pfy.add_argument("--pause-ms", type=int, default=400,
                      help="sleep N ms after save (default 400, matches simulateUserDragMove)")
+    pfy.add_argument("--force", action="store_true",
+                     help="override the decompose-before-IP guard (genuinely one atomic task)")
     pfy.set_defaults(fn=cmd_fly)
 
     # subtask

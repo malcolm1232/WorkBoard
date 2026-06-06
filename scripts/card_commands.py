@@ -256,6 +256,30 @@ def _record_move(card, old_col, new_col):
     })
 
 
+def _looks_multipart(title: str, origin: str) -> bool:
+    """Heuristic: does this card describe MORE THAN ONE part? Used by the
+    decompose-before-IP guard (#103). Conservative — only fires on strong
+    list signals so a single task with one stray comma doesn't trip it:
+      • a numbered list with ≥2 items (`1. … 2. …` / `1) … 2)`)
+      • `Header: a, b` — a colon followed by a comma-list
+      • ≥2 commas in the title (a list of ≥3 things)
+      • an explicit `, and …` / `; …` list joiner anywhere
+    """
+    title = title or ""
+    origin = origin or ""
+    text = f"{title}\n{origin}".lower()
+    nums = re.findall(r"(?:^|\s)(\d+)[.)]\s", text)
+    if len(set(nums)) >= 2:
+        return True
+    if ":" in title and "," in title.split(":", 1)[1]:
+        return True
+    if title.count(",") >= 2:
+        return True
+    if re.search(r",\s+and\s+\S", text) or re.search(r";\s+\S", text):
+        return True
+    return False
+
+
 def cmd_fly(args, d, board):
     """FLY transition — atomic single-hop column change with side-effect
     shortcuts and a built-in animation pause so chained flies don't race
@@ -321,6 +345,29 @@ def cmd_fly(args, d, board):
             "createdAt": ts, "children": [],
         })
         c["lastTouchedSubtask"] = sid
+
+    # #103 DECOMPOSE-BEFORE-IP GUARD — block a multi-part card from reaching
+    # inprogress with zero subtasks (the scenario-#2 failure: parts get lost,
+    # the card lands in IP showing only the auto 1/1). Narrowly scoped to the
+    # genuine "start work" hop (task/backlog → inprogress), never the --bug/
+    # --improve reopen flows. A same-call --subtask already added one above, so
+    # this only fires on a truly naked card. Override: --force, or env
+    # BOARD_SKIP_DECOMPOSE_CHECK=1 for automation (reconcile/e2e).
+    if (args.column == "inprogress" and old in ("task", "backlog")
+            and not bug and not improve
+            and not getattr(args, "force", False)
+            and os.environ.get("BOARD_SKIP_DECOMPOSE_CHECK") != "1"
+            and not (c.get("subtasks") or [])
+            and _looks_multipart(c.get("title", ""), c.get("origin", ""))):
+        sys.exit(
+            f"✋ #{c['num']} looks MULTI-PART but has no subtasks — decompose "
+            f"BEFORE inprogress (carding LAW #103):\n"
+            f"    title: {c.get('title','')!r}\n"
+            f"  • related parts of ONE deliverable → add them first:\n"
+            f"      card.py subtask add {c['num']} \"<part>\"   (then re-run fly)\n"
+            f"  • INDEPENDENT tasks → make N separate cards instead\n"
+            f"  • genuinely one atomic task → card.py fly {c['num']} inprogress --force"
+        )
 
     # The hop + done-semantics: cycle-history (#188) and bug-tag auto-strip.
     c["column"] = args.column
@@ -1019,9 +1066,9 @@ _LAUNCH_BLOCKING_PRIOS = ("critical", "mid")
 def _prelaunch_open_cards(d: dict) -> list[dict]:
     """Return list of cards that block launch.
 
-    Rule (from card #91): in super-urgent or mandatory column, priority
-    critical or mid, not in done/blocked. Sorted: super-urgent first, then
-    by priority (critical → mid), then by card num."""
+    Rule (from card #91, unified #102): in the super-urgent column, priority
+    critical or mid, not in done/blocked. Sorted by priority (critical → mid),
+    then by card num."""
     open_cards = []
     for c in d.get("cards", []):
         col = c.get("column")
@@ -1057,7 +1104,7 @@ def cmd_prelaunch_check(args, d, board):
         else:
             print(f"⚠️  prelaunch-check: {len(open_cards)} item(s) still open")
             for c in open_cards:
-                col = "SUPER URGENT" if c["column"] == "super-urgent" else "MANDATORY  "
+                col = "SUPER URGENT"   # #102 — mandatory retired; only urgent column
                 p = (c.get("priority") or "-")[:1].upper()
                 code = c.get("code") or c.get("id")
                 print(f"  [{col}] #{c['num']:>3} [{p}] {code:<18} {c.get('title','')[:60]}")
@@ -1129,11 +1176,9 @@ def cmd_digest(args, d, board):
         t = done[0]
         last = f"#{t.get('num','?')} {t.get('code') or t.get('id','')} ({_ago(t.get('doneAt'))})"
 
-    blocking = sum(
-        1 for c in cards
-        if c.get("column") in _LAUNCH_BLOCKING_COLS
-        and (c.get("priority") or "low") in _LAUNCH_BLOCKING_PRIOS
-    )
+    # #102 — single source of truth: reuse _prelaunch_open_cards so digest,
+    # prelaunch-check, and the SessionStart hook can never diverge.
+    blocking = len(_prelaunch_open_cards(d))
 
     if getattr(args, "json", False):
         ordered = {k: counts[k] for k in _DIGEST_ORDER if counts.get(k)}
