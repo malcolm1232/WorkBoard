@@ -889,14 +889,20 @@ def run(project: Path, board: Path, port: int, days: int,
         # SessionStart `--reconcile-only` pass firing in this ~10s window stands
         # down instead of racing it (the "reconcile twice / cards shuffle then
         # 'N up to date' again" bug). recon_lock is the belt; this is the braces.
-        if reconcile:
-            events = _flatten_events(project, off + days, sources=sources)
-            events = _filter_events(events, project, date_filter, off) or []
-            if events:
-                n_moved = reconcile_sweep(card_py, board, events)
-                print(f"✓ end-of-replay reconcile: moved {n_moved} card(s)",
-                      file=sys.stderr)
-        _mark_replay_complete(board)
+        # try/finally (#384 RECON-GATE-STUCK): the gate MUST reopen even if the
+        # sweep raises. Without it, an exception in reconcile_sweep leaves
+        # completed_card_replay=0 forever → every future SessionStart recon for
+        # this board stands down permanently (the gate never flips back to 1).
+        try:
+            if reconcile:
+                events = _flatten_events(project, off + days, sources=sources)
+                events = _filter_events(events, project, date_filter, off) or []
+                if events:
+                    n_moved = reconcile_sweep(card_py, board, events)
+                    print(f"✓ end-of-replay reconcile: moved {n_moved} card(s)",
+                          file=sys.stderr)
+        finally:
+            _mark_replay_complete(board)
         return
 
     # Single pass — inline staging, or an explicit non-tier haiku run.
