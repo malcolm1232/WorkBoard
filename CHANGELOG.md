@@ -9,6 +9,24 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.14 — Multi-part carding LAW + decompose-before-IP guard (2026-06-06)
+Full record: `docs/SESSION_LOG_260606.md`.
+- **Codified the multi-part carding LAW (#476, `2d037cf`).** SKILL.md shape table is
+  now a LAW gated by the **header test**: one honest `verb + noun` header covers all
+  parts → **1 card + N subtasks** (parts as subtasks, never in the title); no single
+  header → **N cards**. Mid-task branch test clarified (serves current goal → subtask,
+  else new card).
+- **Enforce decompose-before-IP (#103, `71fabac`).** A fresh-install test caught an agent
+  flying a multi-part card to `inprogress` with zero subtasks (parts lost). Fix: SKILL.md
+  gained a 5-step ordered procedure (decompose in Task *before* IP) + HARD RULE "no naked
+  multi-part card in IP"; `card.py fly` now blocks a multi-part-looking card with no
+  subtasks on the task/backlog→IP hop (new `_looks_multipart` heuristic; override `--force`
+  / `BOARD_SKIP_DECOMPOSE_CHECK=1`).
+- **Recon-gate try/finally (#384, `26d58fb`).** End-of-replay reconcile wrapped so the
+  replay gate always reopens even if the sweep raises — prevents SessionStart recon from
+  being permanently skipped on a board (regression from 23fdc02). Live-validated during
+  this session's bootstrap.
+
 ### 0.9.13 — Bootstrap reconcile: kill premature COMPLETE + recon race; number-free reconcile HUD (2026-06-05)
 - **No premature "✓ COMPLETE".** The tier-fly speedup/solo tier wrongly set
   `is_final=True` (recon runs outside the window, so it was called `reconcile=False`),
