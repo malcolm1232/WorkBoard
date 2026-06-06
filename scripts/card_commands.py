@@ -1087,9 +1087,9 @@ _LAUNCH_BLOCKING_PRIOS = ("critical", "mid")
 def _prelaunch_open_cards(d: dict) -> list[dict]:
     """Return list of cards that block launch.
 
-    Rule (from card #91, unified #102): in the super-urgent column, priority
-    critical or mid, not in done/blocked. Sorted by priority (critical → mid),
-    then by card num."""
+    Rule (from card #91): in super-urgent or mandatory column, priority
+    critical or mid, not in done/blocked. Sorted: super-urgent first, then
+    by priority (critical → mid), then by card num."""
     open_cards = []
     for c in d.get("cards", []):
         col = c.get("column")
@@ -1125,7 +1125,7 @@ def cmd_prelaunch_check(args, d, board):
         else:
             print(f"⚠️  prelaunch-check: {len(open_cards)} item(s) still open")
             for c in open_cards:
-                col = "SUPER URGENT"   # #102 — mandatory retired; only urgent column
+                col = "SUPER URGENT" if c["column"] == "super-urgent" else "MANDATORY  "
                 p = (c.get("priority") or "-")[:1].upper()
                 code = c.get("code") or c.get("id")
                 print(f"  [{col}] #{c['num']:>3} [{p}] {code:<18} {c.get('title','')[:60]}")
@@ -1197,9 +1197,11 @@ def cmd_digest(args, d, board):
         t = done[0]
         last = f"#{t.get('num','?')} {t.get('code') or t.get('id','')} ({_ago(t.get('doneAt'))})"
 
-    # #102 — single source of truth: reuse _prelaunch_open_cards so digest,
-    # prelaunch-check, and the SessionStart hook can never diverge.
-    blocking = len(_prelaunch_open_cards(d))
+    blocking = sum(
+        1 for c in cards
+        if c.get("column") in _LAUNCH_BLOCKING_COLS
+        and (c.get("priority") or "low") in _LAUNCH_BLOCKING_PRIOS
+    )
 
     if getattr(args, "json", False):
         ordered = {k: counts[k] for k in _DIGEST_ORDER if counts.get(k)}
