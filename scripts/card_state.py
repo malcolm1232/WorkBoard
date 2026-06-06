@@ -238,16 +238,25 @@ def _taxonomy_names(d: dict) -> list[str]:
     return names
 
 
+# Structural marker tags — NOT domain taxonomy. They mark a card's *kind* for
+# tooling (recon, the phase-card guard), so they bypass taxonomy validation and
+# never consume a profile slot. `phase` (#107) marks a roadmap phase card the
+# fly-guard refuses to send to inprogress; `discovered` is the recon provenance
+# marker (also appended directly elsewhere).
+_STRUCTURAL_TAGS = {"phase", "discovered"}
+
+
 def _check_tags(tags: list[str], d: dict, force: bool) -> list[str]:
     """Filter tags against board.json taxonomy. Unknown tags are blocked unless
     --force, with a close-match suggestion printed to stderr. Returns the
-    accepted tag list. Empty taxonomy = pass-through (back-compat)."""
+    accepted tag list. Empty taxonomy = pass-through (back-compat). Structural
+    marker tags (_STRUCTURAL_TAGS) always pass."""
     taxonomy = _taxonomy_names(d)
     if not taxonomy:
         return tags
     accepted = []
     for t in tags or []:
-        if t in taxonomy:
+        if t in taxonomy or t in _STRUCTURAL_TAGS:
             accepted.append(t)
             continue
         if force:

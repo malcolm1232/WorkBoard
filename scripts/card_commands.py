@@ -346,6 +346,27 @@ def cmd_fly(args, d, board):
         })
         c["lastTouchedSubtask"] = sid
 
+    # #107 PHASE-CARD GUARD — a phase card is a roadmap CONTAINER, not a unit of
+    # work; it must never become the active pulse (it would sit in IP for the
+    # whole phase). On the start-work hop, block it and tell the agent to
+    # GRADUATE the specific deliverable into its own linked card. Phase detection:
+    # the structural `phase` tag (primary) or a "Phase <n>" title (law format).
+    _is_phase = ("phase" in (c.get("tags") or [])
+                 or bool(re.match(r"\s*phase\s*\d", c.get("title", ""), re.I)))
+    if (args.column == "inprogress" and old in ("task", "backlog")
+            and not bug and not improve
+            and not getattr(args, "force", False)
+            and os.environ.get("BOARD_SKIP_DECOMPOSE_CHECK") != "1"
+            and _is_phase):
+        sys.exit(
+            f"✋ #{c['num']} is a PHASE card — phases don't go in-progress (too big "
+            f"for one pulse). GRADUATE the deliverable you're starting into its own card:\n"
+            f"    card.py add --column task --title \"<deliverable>\" --link {c['num']}\n"
+            f"    card.py fly <new#> inprogress\n"
+            f"  then tick this phase's subtask when that deliverable card ships.\n"
+            f"  (genuinely want the whole phase in IP? add --force)"
+        )
+
     # #103 DECOMPOSE-BEFORE-IP GUARD — block a multi-part card from reaching
     # inprogress with zero subtasks (the scenario-#2 failure: parts get lost,
     # the card lands in IP showing only the auto 1/1). Narrowly scoped to the
