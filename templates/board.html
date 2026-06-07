@@ -1843,6 +1843,13 @@ function setLogsMinimized(min) {
   const body = document.getElementById('logs-hud-body');
   const btn  = document.getElementById('logs-min-btn');
   if (!hud || !body || !btn) return;
+  // #487 — anchor by the BOTTOM edge so minimize/expand keeps the lower bound
+  // fixed and moves only the top edge (collapse upward), instead of growing
+  // downward off-screen when the HUD is top-anchored (after a drag / saved pos).
+  // Pin `bottom` from the current rect and drop `top` before the height change.
+  const _r = hud.getBoundingClientRect();
+  hud.style.bottom = Math.max(0, window.innerHeight - _r.bottom) + 'px';
+  hud.style.top = '';
   hud.dataset.minimized = min ? '1' : '0';
   if (min) {
     body.style.display = 'none';
