@@ -342,6 +342,21 @@
   body.cmd-pan-ready #board { cursor: grab; }
   body.cmd-panning, body.cmd-panning #board { cursor: grabbing !important; user-select: none; }
   body.cmd-panning .card { pointer-events: none; }
+  /* #515 — shift-click multi-selection: accent ring + soft glow on chosen cards,
+     and a bottom-centre pill telling the user how many + how to act. */
+  .card.selected {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+    box-shadow: 0 0 0 4px rgba(217,119,87,0.16);
+  }
+  #sel-pill {
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 16px);
+    z-index: 420; padding: 8px 16px; border-radius: 999px;
+    background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 600;
+    letter-spacing: .01em; box-shadow: 0 10px 30px rgba(45,40,38,0.28);
+    opacity: 0; pointer-events: none;
+    transition: opacity .16s ease, transform .16s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  #sel-pill.show { opacity: 1; transform: translate(-50%, 0); }
   /* #361 — breathing room at the bottom of each column. Earlier takes
      (#board padding-bottom, .column-stack margin, last-column margin) all got
      dropped from the scroll extent by the Chromium flex-scroll bug. The column's
@@ -1646,6 +1661,7 @@ let _colDragRects = null;      // id → DOMRect at dragstart (for FLIP)
 // drop commits to state.cards; dragend without drop re-renders to revert.
 let _cardDrag = null;          // { cardId, srcCol, srcEl, hoverCol, hoverBeforeCardId }
 let _cardDragRects = null;     // cardId → DOMRect at last reflow (for FLIP)
+let _selected = new Set();     // #515 — shift-click multi-selection of card ids
 // #119 — column live-reflow during drag (iPhone home-screen feel).
 // Snapshot of state.columns taken at dragstart so cancel (dragend w/o drop)
 // can revert all the live-preview reorders. _colDragSrcId carries the source
@@ -2174,6 +2190,54 @@ document.addEventListener('mouseup', e => {
   if (moved) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 
+// ===== Shift-click multi-select + group move (#515) =====================
+// Shift-click toggles a card into a selection set (highlight ring); dragging
+// any selected card then moves the WHOLE set to the drop column (commitCardDrag
+// handles the group move). A plain click clears the selection and opens the
+// card; Escape or a click on empty board space also clears. A bottom-centre
+// pill shows the count + how to act.
+function _selPill() {
+  let p = document.getElementById('sel-pill');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = 'sel-pill';
+    document.body.appendChild(p);
+  }
+  return p;
+}
+function _refreshSelPill() {
+  const p = _selPill();
+  const n = _selected.size;
+  if (n > 0) {
+    p.textContent = `${n} selected · drag to move · Esc to clear`;
+    p.classList.add('show');
+  } else {
+    p.classList.remove('show');
+  }
+}
+function toggleSelect(cardId, el) {
+  if (_selected.has(cardId)) { _selected.delete(cardId); if (el) el.classList.remove('selected'); }
+  else                       { _selected.add(cardId);    if (el) el.classList.add('selected'); }
+  _refreshSelPill();
+}
+function clearSelection() {
+  if (!_selected.size) return;
+  _selected.forEach(id => {
+    const el = document.querySelector(`.card[data-card-id="${id}"]`);
+    if (el) el.classList.remove('selected');
+  });
+  _selected.clear();
+  _refreshSelPill();
+}
+// Click on empty board space clears the selection (cards stopPropagation via
+// their own click handler opening the modal, so this only fires on the gaps).
+document.addEventListener('click', e => {
+  if (!_selected.size) return;
+  if (e.target.closest('.card')) return;
+  if (e.target.closest('#sel-pill, .modal-overlay, #logs-hud, #drag-hud')) return;
+  clearSelection();
+});
+
 // ===== Column stacking schema (#117 — schema only; no render impact yet) =====
 // A column may sit BELOW another column in a vertical stack via the
 // `stackUnder` field. null/missing = top-level column with its own slot in
@@ -2495,6 +2559,25 @@ function commitCardDrag() {
       if (st && !st.done) { st.done = true; st.doneAt = ts; }
     }
   }
+  // #515 — group move: if the dragged card is part of a multi-selection, bring
+  // the rest of the selected cards into the same column with the same core
+  // semantics (column + doneAt + history + active-work + bug-strip). They keep
+  // their array order; the full render() below reconciles their DOM.
+  const _groupMove = _selected.size > 1 && _selected.has(card.id);
+  if (_groupMove) {
+    for (const oc of state.cards) {
+      if (!_selected.has(oc.id) || oc.id === card.id || oc.column === targetCol) continue;
+      const from = oc.column;
+      oc.column = targetCol;
+      oc.updatedAt = now();
+      if (targetCol === 'done' && !oc.doneAt) oc.doneAt = oc.updatedAt;
+      if (targetCol !== 'done') oc.doneAt = null;
+      recordMove(oc, from, targetCol);
+      if (targetCol === 'inprogress' && from !== 'inprogress') state.activeWorkId = oc.id;
+      else if (from === 'inprogress' && targetCol !== 'inprogress' && state.activeWorkId === oc.id) state.activeWorkId = null;
+      if (targetCol === 'done' && (oc.tags || []).includes('bug')) oc.tags = oc.tags.filter(t => t !== 'bug');
+    }
+  }
   state.cards.splice(insertIdx, 0, card);
   // DOM is already correct (preview did the insertBefore). Don't render() —
   // it would rebuild the DOM from scratch and kill the in-flight FLIPs that
@@ -2505,6 +2588,13 @@ function commitCardDrag() {
   if (srcEl && srcEl.dataset.col !== targetCol) srcEl.dataset.col = targetCol;
   _cardDrag = null;
   scheduleSave();
+  // #515 — a group move mutated other columns' cards; clear the selection and
+  // do a full render so they visibly relocate (the single-card FLIP path can't
+  // show them). A non-group drag keeps the FLIP-preserving fast path.
+  if (_groupMove) { clearSelection(); render(); return; }
+  // Dragging the single selected card consumes the selection; dragging an
+  // unrelated card leaves any existing selection intact.
+  if (_selected.has(card.id)) clearSelection();
   refreshColumnCount(targetCol);
   if (srcCol && srcCol !== targetCol) refreshColumnCount(srcCol);
   refreshActiveWork();   // #254 — repaint pulse (this path skips render())
@@ -3182,6 +3272,7 @@ function renderCardCompact(card) {
   if ((card.tags || []).includes('bug')) el.classList.add('is-bug');
   if (_tagFilter.size && !(card.tags || []).some(t => _tagFilter.has(t))) el.classList.add('dim-by-filter');
   if (_columnFilter.size && !_columnFilter.has(card.column)) el.classList.add('dim-by-filter');
+  if (_selected.has(card.id)) el.classList.add('selected');   // #515 — persist selection across re-renders
   el.draggable = true;
   el.dataset.cardId = card.id;
   el.dataset.col = card.column;
@@ -3227,6 +3318,10 @@ function renderCardCompact(card) {
   });
   el.addEventListener('click', e => {
     if (e.target.closest('.prio-chip, .num-ref')) return;
+    // #515 — Shift-click toggles multi-selection instead of opening the card.
+    if (e.shiftKey) { e.preventDefault(); toggleSelect(card.id, el); return; }
+    // A plain click on a card clears any selection, then opens it.
+    if (_selected.size) clearSelection();
     openModal(card.id);
   });
   // Right-click → confirm + delete. Same path as the modal Delete button
@@ -6104,6 +6199,7 @@ async function init() {
     if (e.key === 'Escape') {
       if (_openCardId) closeModal();
       else if (_tagLegendOpen) toggleTagLegend(false);
+      else if (_selected.size) clearSelection();   // #515 — drop multi-selection
       return;
     }
     // #346 — Enter closes the open card ("go back", like clicking outside),
