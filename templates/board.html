@@ -3917,6 +3917,7 @@ async function resetColumnsToDefault() {
   render();
   requestAnimationFrame(() => flipPlayColumns(old));
   resetHudsToDefault();   // #488 — also snap the floating HUDs back to default
+  logEvent('col', '↺ reset columns to default');   // #522 — log structural ops
   toast('Columns + HUDs reset — ' + undoHint() + ' to undo', 3200);
 }
 
@@ -3931,6 +3932,7 @@ function sortCardsByTimeNow() {
   if (!state || !Array.isArray(state.cards)) return;
   pushUndo();
   flipResort();
+  logEvent('sys', '⇅ sorted cards by time (newest first)');   // #522
   toast('Cards sorted by time — ' + undoHint() + ' to undo', 3000);
 }
 
@@ -5097,7 +5099,10 @@ function renderColumn(col, cards) {
   armUndoOnFocus(nameEl);
   nameEl.addEventListener('blur', () => {
     const v = nameEl.textContent.trim();
-    if (v && v !== col.name) { col.name = v; scheduleSave(); }
+    if (v && v !== col.name) {
+      logEvent('col', `renamed column "${col.name}" → "${v}"`);   // #522
+      col.name = v; scheduleSave();
+    }
     else nameEl.textContent = col.name;
   });
   nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); } });
@@ -5953,6 +5958,10 @@ function openCardMenu(card, x, y) {
 function deleteCard(id) {
   if (!state) return;
   pushUndo();
+  // #522 — log BEFORE removing (the SSE echo's handleCardRemoved can't log our
+  // own delete: the card is already gone from local state by the time it fires).
+  const _doomed = state.cards.find(c => c.id === id);
+  if (_doomed) logEvent('remove', `#${_doomed.num} "${_doomed.title || ''}"`, _doomed);
   state.cards = state.cards.filter(c => c.id !== id);
   const el = findCardEl(id);
   if (el) {
