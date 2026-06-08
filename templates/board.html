@@ -3683,6 +3683,19 @@ async function resetColumnsToDefault() {
 // opens them at default. Live elements are repositioned immediately; each may
 // be absent (the load HUD only exists during a sync) so guard with if.
 function resetHudsToDefault() {
+  // #491 FLIP each HUD from its current spot to the new default so it GLIDES
+  // back, matching the column reflow (same 1080ms / easing as flipPlayColumns).
+  // Capture each "first" rect BEFORE moving it, then play the delta in a rAF.
+  const flip = (el, first) => {
+    if (!el || !first) return;
+    const last = el.getBoundingClientRect();
+    const dx = first.left - last.left, dy = first.top - last.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    el.animate(
+      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
+      { duration: 1080, easing: 'cubic-bezier(0.34, 1.4, 0.64, 1)' }
+    );
+  };
   // Logs HUD → default: bottom-right, 340×240, un-minimized.
   try {
     localStorage.removeItem(_LOGS_HUD_POS_KEY);
@@ -3690,7 +3703,9 @@ function resetHudsToDefault() {
     localStorage.removeItem(_LOGS_HUD_MIN_KEY);
   } catch (e) {}
   const lh = document.getElementById('logs-hud');
+  let lhFirst = null;
   if (lh) {
+    lhFirst = lh.getBoundingClientRect();          // before the move
     lh.dataset.minimized = '0';
     const body = document.getElementById('logs-hud-body'); if (body) body.style.display = '';
     const mb = document.getElementById('logs-min-btn'); if (mb) { mb.textContent = '▾'; mb.title = 'Minimize'; }
@@ -3701,10 +3716,14 @@ function resetHudsToDefault() {
   // Recon / load HUD → default: top-right (top:110px, right:12px).
   try { localStorage.removeItem('workboard.loadHudPos'); } catch (e) {}
   const rh = document.getElementById('load-hud');
+  let rhFirst = null;
   if (rh) {
+    rhFirst = rh.getBoundingClientRect();           // before the move
     rh.style.left = ''; rh.style.bottom = '';
     rh.style.top = '110px'; rh.style.right = '12px';
   }
+  // Play the glide once layout has settled into the new positions.
+  requestAnimationFrame(() => { flip(lh, lhFirst); flip(rh, rhFirst); });
 }
 
 // Read project name from board.json `title` field. Falls back gracefully.
