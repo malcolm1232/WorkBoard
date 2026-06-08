@@ -1918,6 +1918,14 @@ async function refreshLogsCommit() {
 // renders if the HUD is open (cheap check). Used by SSE handlers.
 // Optional `card` arg appends tag chips (currently just 🐞 bug) so the
 // log line carries the same context the user sees on the card itself.
+// #511 — resolve a column id to its human display name for the Logs HUD, so a
+// move reads "In Progress → Done", not the internal "col-akbbny… → done". Falls
+// back to the id if the column was deleted or isn't loaded yet.
+function colLabel(id) {
+  const c = state && state.columns ? state.columns.find(x => x.id === id) : null;
+  return (c && c.name) || id;
+}
+
 // Render one buffered log entry into the HUD body (newest on top). Pure DOM —
 // no persistence — so it's reused by both live logging and #493 replay.
 function _renderLogLine(entry) {
@@ -5508,7 +5516,7 @@ function handleCardAdded({ card }) {
   // If a brand-new card is born directly into In Progress, treat it as
   // a transition from "nothing" → inprogress.
   applyActiveWorkTransition(card.id, null, card.column);
-  logEvent('add', `#${card.num} "${card.title}" → ${card.column}`, card);
+  logEvent('add', `#${card.num} "${card.title}" → ${colLabel(card.column)}`, card);
 }
 
 // Replays the user-drag visual sequence for a CLI/SSE-driven cross-column
@@ -5625,7 +5633,7 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
     // mislabel a hands-on move that happens to follow an automated one.
     const h = card.history && card.history.length ? card.history[card.history.length - 1] : null;
     const via = (h && h.from === fromColumn && h.to === toColumn) ? h.via : null;
-    logEvent('move', `#${card.num} ${fromColumn} → ${toColumn}`, card, via);
+    logEvent('move', `#${card.num} ${colLabel(fromColumn)} → ${colLabel(toColumn)}`, card, via);
   } else {
     // In-place edit (title/priority/tags/subtask) — swap DOM, pulse + flash.
     const newEl = renderCardCompact(card);
@@ -5634,7 +5642,9 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
     setTimeout(() => newEl.classList.remove('flashing','pulsing'), 1300);
     // #508 — an in-place edit (title/priority/tags/subtask) is NOT a column
     // change; log it as its own grey EDIT kind, not a misleading MOVE.
-    logEvent('edit', `#${card.num} edited`, card);
+    // #512 — name the card so an edit is identifiable, not a bare "#354 edited".
+    // Reads e.g. `EDIT  Card #354 "Fix drag glitch"`.
+    logEvent('edit', `Card #${card.num} "${card.title || ''}"`, card);
   }
   // #249 — the in-place branch builds a fresh el without active-work; an edit
   // to the active card (subtask check, priority) would otherwise drop its
