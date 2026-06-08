@@ -336,6 +336,12 @@
     height: calc(100% - 48px);
     align-items: flex-start;
   }
+  /* #514 — Cmd/Ctrl-held hand-tool: grab affordance, then grabbing while panning.
+     During a pan, kill text selection + pointer events on cards so the gesture
+     stays a clean scroll. */
+  body.cmd-pan-ready #board { cursor: grab; }
+  body.cmd-panning, body.cmd-panning #board { cursor: grabbing !important; user-select: none; }
+  body.cmd-panning .card { pointer-events: none; }
   /* #361 — breathing room at the bottom of each column. Earlier takes
      (#board padding-bottom, .column-stack margin, last-column margin) all got
      dropped from the scroll extent by the Chromium flex-scroll bug. The column's
@@ -2122,6 +2128,52 @@ document.addEventListener('dragover', e => {
 document.addEventListener('drop', _asStop, true);
 document.addEventListener('dragend', _asStop, true);
 
+// ===== Cmd+drag to pan the board (#514) =================================
+// When the board is wider/taller than the viewport you may not be able to
+// reach a drop target by dragging a card alone. Holding Cmd (⌘) / Ctrl turns a
+// press-drag anywhere into a hand-tool that scrolls the #board (which is
+// overflow:auto on both axes) — like grab-to-pan in Figma/Miro. While Cmd is
+// down, card dragstart is suppressed (see renderCardCompact) so the gesture
+// pans instead of picking up a card.
+let _boardPan = null;   // { x, y, sl, st, moved } while panning, else null
+function _isPanModifier(e) { return e.metaKey || e.ctrlKey; }
+// Show a grab cursor the moment Cmd/Ctrl is held (affordance), clear on release.
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Meta' || e.key === 'Control') && !_boardPan) document.body.classList.add('cmd-pan-ready');
+});
+document.addEventListener('keyup', e => {
+  if (e.key === 'Meta' || e.key === 'Control') document.body.classList.remove('cmd-pan-ready');
+});
+window.addEventListener('blur', () => document.body.classList.remove('cmd-pan-ready'));
+document.addEventListener('mousedown', e => {
+  if (e.button !== 0 || !_isPanModifier(e)) return;
+  const board = document.getElementById('board');
+  if (!board) return;
+  // Don't hijack presses on the floating HUDs, modals, or the trash zone.
+  if (e.target.closest('#logs-hud, #drag-hud, #mini-prompt-overlay, #mini-confirm-overlay, .modal-overlay, #col-trash')) return;
+  _boardPan = { x: e.clientX, y: e.clientY, sl: board.scrollLeft, st: board.scrollTop, moved: false };
+  document.body.classList.add('cmd-panning');
+  e.preventDefault();
+}, true);
+document.addEventListener('mousemove', e => {
+  if (!_boardPan) return;
+  const board = document.getElementById('board');
+  if (!board) { _boardPan = null; return; }
+  const dx = e.clientX - _boardPan.x, dy = e.clientY - _boardPan.y;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _boardPan.moved = true;
+  board.scrollLeft = _boardPan.sl - dx;
+  board.scrollTop  = _boardPan.st - dy;
+  e.preventDefault();
+}, true);
+document.addEventListener('mouseup', e => {
+  if (!_boardPan) return;
+  const moved = _boardPan.moved;
+  _boardPan = null;
+  document.body.classList.remove('cmd-panning');
+  // Swallow the trailing click so a pan never opens a card modal.
+  if (moved) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+
 // ===== Column stacking schema (#117 — schema only; no render impact yet) =====
 // A column may sit BELOW another column in a vertical stack via the
 // `stackUnder` field. null/missing = top-level column with its own slot in
@@ -3140,6 +3192,8 @@ function renderCardCompact(card) {
   }
 
   el.addEventListener('dragstart', e => {
+    // #514 — Cmd/Ctrl held → this gesture pans the board, don't pick up a card.
+    if (e.metaKey || e.ctrlKey || _boardPan) { e.preventDefault(); return; }
     // Safari rejects custom MIME types; mirror the id into text/plain so
     // mouse-drag works in every browser. text/card-id is kept for back-compat.
     e.dataTransfer.setData('text/plain', 'card:' + card.id);
