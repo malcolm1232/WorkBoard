@@ -287,8 +287,12 @@ fi
 # project activity since the last recon), so a quick re-open costs nothing.
 # CLAUDECODE is UNSET so reconcile_sweep takes the cheap Haiku path, not the
 # prose recon_pending path (which is reserved for the in-session main agent).
-# Opt out with BOARD_NO_RECON=1 (CI/headless/demo).
-if [ "${just_bootstrapped:-0}" != "1" ] && [ "${BOARD_NO_RECON:-0}" != "1" ] && [ -f "${board_path}" ]; then
+# Opt out with BOARD_NO_RECON=1 (CI/headless/demo) for a one-off, or drop a
+# persistent per-board marker file board/.no-live-recon to silence the
+# live-startup sweep for THIS board forever (#516). Bootstrap recon is a
+# separate path (serve.py --bootstrap) and is unaffected by either opt-out.
+if [ "${just_bootstrapped:-0}" != "1" ] && [ "${BOARD_NO_RECON:-0}" != "1" ] \
+   && [ ! -f "$(dirname "${board_path}")/.no-live-recon" ] && [ -f "${board_path}" ]; then
   extractor="$(dirname "$0")/hourly_extractor.py"
   if [ -f "${extractor}" ]; then
     env -u CLAUDECODE nohup python3 "${extractor}" \
