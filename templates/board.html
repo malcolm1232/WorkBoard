@@ -183,7 +183,10 @@
   /* #477 — segmented pill: two clickable actions (Reset Columns | Sort Time)
      sharing one rounded shell, split by a hairline divider. */
   header .header-pill.seg-pill { padding: 0; gap: 0; overflow: hidden; }
-  header .header-pill.seg-pill:hover { background: var(--card-bg); border-color: var(--accent); }
+  /* #517 — the segmented pill shows per-button glow (.seg:hover) only; suppress
+     the base .header-pill:hover accent border ("red lining") on the shell so the
+     whole pill doesn't outline — the individual Reset/Sort hover carries it. */
+  header .header-pill.seg-pill:hover { background: var(--card-bg); border-color: var(--card-border); }
   header .seg-pill .seg {
     border: 0; background: transparent; color: inherit;
     font: inherit; font-size: 12px; font-weight: 500;
