@@ -1939,6 +1939,7 @@ function _renderLogLine(entry) {
   const colorByKind = {
     'add':    '#9adb9a',
     'move':   '#7fb9ff',
+    'edit':   '#8b93a3',   // #508 — in-place edit; muted grey, not move-blue
     'remove': '#ff8a7a',
     'col':    '#FFD479',
     'sys':    '#a09ab8',
@@ -5602,7 +5603,9 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
     newEl.classList.add('flashing', 'pulsing');
     oldEl.replaceWith(newEl);
     setTimeout(() => newEl.classList.remove('flashing','pulsing'), 1300);
-    logEvent('move', `#${card.num} edited`, card);
+    // #508 — an in-place edit (title/priority/tags/subtask) is NOT a column
+    // change; log it as its own grey EDIT kind, not a misleading MOVE.
+    logEvent('edit', `#${card.num} edited`, card);
   }
   // #249 — the in-place branch builds a fresh el without active-work; an edit
   // to the active card (subtask check, priority) would otherwise drop its

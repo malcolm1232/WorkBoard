@@ -349,8 +349,10 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
                 continue
             if cur["column"] == target:
                 continue
+            # #506 — these moves are the automated background harvester, not a
+            # hands-on move; tag them so the Logs HUD shows (Auto-harvest) MOVE.
             args = [sys.executable, str(card_py), "--board", str(board),
-                    "fly", str(num), target, "--pause-ms", "150"]
+                    "fly", str(num), target, "--pause-ms", "150", "--via", "harvest"]
             if target == "done":
                 args += ["--writeup", f"Recon: {reason}"]
             else:

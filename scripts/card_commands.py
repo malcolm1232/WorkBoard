@@ -970,6 +970,21 @@ def cmd_recover(args, d, board):
         print("Re-run with --apply to write it. Current state stays in .backups, so it's reversible.")
         return
 
+    # #507 — a restore visibly moves cards BACK to their pre-edit columns; tag
+    # each such move as an undo so the Logs HUD shows (Undo) MOVE rather than a
+    # plain one. Append a history event {from: current col, to: restored col,
+    # via: undo} as the LAST entry so the client's from/to guard matches THIS
+    # move. The backup file on disk is untouched (we mutate the in-memory copy
+    # that becomes the new live board, where the undo is now first-class history).
+    cur_by_id = {c.get("id"): c for c in d.get("cards", [])}
+    for rc in restored.get("cards", []):
+        cur = cur_by_id.get(rc.get("id"))
+        if cur and cur.get("column") != rc.get("column"):
+            rc.setdefault("history", []).append({
+                "from": cur.get("column"), "to": rc.get("column"),
+                "at": now_iso(), "via": "undo",
+            })
+
     # Seed rev from current so atomic_save bumps to cur_rev+1 (a forward rev
     # SSE clients accept) rather than replaying the backup's old, lower rev.
     restored["rev"] = cur_rev
