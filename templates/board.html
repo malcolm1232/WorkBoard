@@ -1950,7 +1950,7 @@ function _renderLogLine(entry) {
     ? ' <span style="color:#ff6b6b;font-weight:600;">[🐞 bug]</span>' : '';
   // #504 — source prefix so an automated move isn't mistaken for a hands-on one.
   // Muted grey, lower-weight: "the system did this", not a card you touched.
-  const VIA_LABEL = { user: 'User', agent: 'Agent', recon: 'Recon', undo: 'Undo', harvest: 'Auto-harvest', autoship: 'Auto-ship' };
+  const VIA_LABEL = { user: 'User', agent: 'Agent', recon: 'Recon', undo: 'Undo', redo: 'Redo', harvest: 'Auto-harvest', autoship: 'Auto-ship' };
   // #509 — colour the actor so User vs Agent is scannable at a glance: user =
   // warm teal (a human did it), agent = lavender (Claude/CLI), automated
   // sub-types = muted grey ("the system, unattended").
@@ -2813,12 +2813,33 @@ function undo() {
   const cur = _snapState();
   const prev = _undoStack.pop();
   if (cur && cur !== prev) _redoStack.push(cur);
-  _restoreSnap(prev);
+  _restoreSnap(_tagRestoreMoves(prev, 'undo'));   // #510 — see (Undo) MOVE in the Logs HUD
   applyBoardTitle();
   scheduleSave();
   render();
   refreshTagLegend();
   toast('Undo');
+}
+
+// #510 — Cmd+Z restores a whole-state snapshot, so a reverted card move never
+// went through recordMove and stayed UNTAGGED in the Logs HUD (plain MOVE). Diff
+// the snapshot we're about to restore against the live state and stamp a
+// {from: current, to: restored, via} history event (the LAST entry, so the
+// SSE-side from/to guard matches) on each card that visibly moves. `snap` is the
+// JSON string headed into _restoreSnap; we mutate its cards in place and return
+// the re-serialised snapshot so the tag rides into state + the POST.
+function _tagRestoreMoves(snap, via) {
+  try {
+    const o = JSON.parse(snap);
+    const liveCol = new Map((state.cards || []).map(c => [c.id, c.column]));
+    for (const c of (o.cards || [])) {
+      const from = liveCol.get(c.id);
+      if (from !== undefined && from !== c.column) {
+        (c.history = c.history || []).push({ from, to: c.column, at: now(), via });
+      }
+    }
+    return JSON.stringify(o);
+  } catch (_) { return snap; }
 }
 function redo() {
   if (!_redoStack.length) { toast('Nothing to redo'); return; }
@@ -2828,7 +2849,7 @@ function redo() {
   const cur = _snapState();
   const next = _redoStack.pop();
   if (cur && cur !== next) _undoStack.push(cur);
-  _restoreSnap(next);
+  _restoreSnap(_tagRestoreMoves(next, 'redo'));   // #510 — (Redo) MOVE in the Logs HUD
   applyBoardTitle();
   scheduleSave();
   render();
