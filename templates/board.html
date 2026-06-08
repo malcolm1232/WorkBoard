@@ -3609,7 +3609,7 @@ function enterApp() {
   const resetBtn = $('#reset-cols-btn');
   if (resetBtn) resetBtn.onclick = resetColumnsToDefault;
   const sortTimeBtn = $('#sort-time-btn');
-  if (sortTimeBtn) sortTimeBtn.onclick = sortCardsByTime;   // #477
+  if (sortTimeBtn) sortTimeBtn.onclick = sortCardsByTimeNow;   // #477
   // #177 — Logs HUD is always on. Minimizable to header-only via the
   // ▾/▸ button inside the HUD. No top-bar pill (keeps the header clean).
   _logsHud();
@@ -3713,19 +3713,17 @@ async function resetColumnsToDefault() {
   toast('Columns + HUDs reset — ' + undoHint() + ' to undo', 3200);
 }
 
-// #477 — Sort Time: re-sort the cards INSIDE every column by time (newest
-// first by createdAt, num as tiebreak — the board's canonical order). Column
-// positions are untouched; this only re-orders the cards within each column,
-// undoing any manual drag-reorder. render() lists each column's cards in
-// state.cards array order, so one stable global time-sort re-orders every
-// column at once. The In-Progress "current work" pin is applied at render time,
-// so it still floats to the top. One undo entry.
-function sortCardsByTime() {
+// #477 — Sort Time button: the on-demand, repeatable version of the time-sort
+// the board already runs automatically during bootstrap reconcile. It reuses
+// flipResort() (#91) — the same newest-first sort (createdAt desc, num tiebreak)
+// with the FLIP glide animation — and just adds an undo checkpoint + toast so a
+// manual click is undoable. Column positions are untouched; only the cards
+// within each column re-order. The In-Progress "current work" pin is applied at
+// render time, so it still floats to the top.
+function sortCardsByTimeNow() {
   if (!state || !Array.isArray(state.cards)) return;
   pushUndo();
-  state.cards.sort((a, b) => _cardSortTs(b) - _cardSortTs(a) || (b.num || 0) - (a.num || 0));
-  scheduleSave();
-  render();
+  flipResort();
   toast('Cards sorted by time — ' + undoHint() + ' to undo', 3000);
 }
 
