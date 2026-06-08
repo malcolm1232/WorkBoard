@@ -2157,6 +2157,12 @@ document.addEventListener('mousedown', e => {
   if (e.target.closest('#logs-hud, #drag-hud, #mini-prompt-overlay, #mini-confirm-overlay, .modal-overlay, #col-trash')) return;
   _boardPan = { x: e.clientX, y: e.clientY, sl: board.scrollLeft, st: board.scrollTop, moved: false };
   document.body.classList.add('cmd-panning');
+  // #521 — stopPropagation so the #127 background drag-to-pan (which fires on
+  // empty #board space) never ALSO engages. Otherwise both run, and our mouseup
+  // swallows #127's cleanup → #127 sticks in panning=true and the next gesture
+  // needs an extra click to reset. With this, Cmd+drag is the sole pan handler
+  // and engages first-try whether the cursor is over a card or empty space.
+  e.stopPropagation();
   e.preventDefault();
 }, true);
 document.addEventListener('mousemove', e => {
