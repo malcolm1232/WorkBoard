@@ -406,6 +406,28 @@ def cmd_fly(args, d, board):
             f"  • genuinely one atomic task → card.py fly {c['num']} inprogress --force"
         )
 
+    # #537 ONE-IN-FLIGHT GUARD — keep the live flow SEQUENTIAL (task→IP→done, one
+    # at a time) so cards don't pile up in In-Progress and get flown to Done in a
+    # batch. Keyed on the ACTIVE (pulsing) card — the one most-recently moved into
+    # IP — not every parked card, so old backlog-in-IP doesn't nag. Soft: --force
+    # for genuine parallel work; BOARD_SKIP_DECOMPOSE_CHECK exempts automation
+    # (reconcile / e2e / sim / replay), same as the guards above.
+    if (args.column == "inprogress" and old in ("task", "backlog")
+            and not bug and not improve
+            and not getattr(args, "force", False)
+            and os.environ.get("BOARD_SKIP_DECOMPOSE_CHECK") != "1"):
+        _awid = d.get("activeWorkId")
+        _active = next((x for x in d.get("cards", []) if x.get("id") == _awid), None) if _awid else None
+        if (_active and _active.get("id") != c.get("id")
+                and _active.get("column") == "inprogress" and not _active.get("doneAt")):
+            sys.exit(
+                f"✋ #{_active['num']} is still in progress (the active/pulsing card). "
+                f"Keep the flow sequential — finish it first:\n"
+                f"    card.py fly {_active['num']} done --writeup \"...\"\n"
+                f"  then start #{c['num']}.\n"
+                f"  (genuinely working both in parallel? add --force)"
+            )
+
     # #476 DONE-COMPLETENESS GUARD — don't let a card reach Done with unfinished
     # subtasks (the "flew to Done at 1/4, forgot to tick the rest" miss). The
     # done-hop below auto-closes lastTouchedSubtask, so exclude it; the auto
