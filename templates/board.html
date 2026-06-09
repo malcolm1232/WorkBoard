@@ -3415,10 +3415,8 @@ function renderCardCompact(card) {
     if (e.target.closest('.prio-chip, .num-ref')) return;
     openModal(card.id);
   });
-  // Right-click → confirm + delete. Same path as the modal Delete button
-  // and the drag-to-trash zone (see deleteCard helper).
-  // #333 — right-click opens the card action menu (Move to / Delete) instead
-  // of jumping straight to a delete confirm. Delete now lives inside that menu.
+  // #333 — right-click opens the card action menu (Move to / Delete), not a
+  // straight delete-confirm. Delete now lives inside that menu.
   el.addEventListener('contextmenu', e => {
     e.preventDefault();
     openCardMenu(card, e.clientX, e.clientY);
