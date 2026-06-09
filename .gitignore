@@ -37,3 +37,6 @@ board/recon_pending.json
 
 # local plugin-reinstall backups (machine state, never ship)
 .reinstall-backups/
+
+# Added by board-steward — local board data may contain secrets
+board/.replay_state.json
