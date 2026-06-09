@@ -4448,13 +4448,6 @@ function render() {
   // open, reconnect-via-poll, inline install before connect).
   playEntrance();
   _restoreScroll(_scroll);   // #345 — put each column back where the user had it
-
-  // #564 — the green poll-flash is ONE-SHOT: consume _flashIds in the render
-  // that follows a detect, then clear it. Otherwise the set lingers and every
-  // later LOCAL render (open/close a card, swap a column, add a card — all call
-  // render() but NOT detectChangesAndSnapshot) re-applies .flashing to those
-  // same cards, so unrelated cards "randomly glow green" on any action.
-  _flashIds = new Set();
 }
 
 // ===== #313 first-load entrance animation =====
