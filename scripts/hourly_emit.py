@@ -9,6 +9,7 @@ import it freely.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -217,8 +218,15 @@ def _card_fly(card_py: Path, board: Path, num: int, col: str,
         args += ["--improve", improve[:120]]
     if subtask:
         args += ["--subtask", subtask[:120]]
+    # #575: bootstrap replay is AUTOMATION — bypass the live-carding guards
+    # (#103 decompose-before-IP, #537 one-in-flight, #476 done-completeness).
+    # Without this, a mined card with a ` + ` glance-title but an empty subtasks
+    # array (common from Haiku) gets its fly→inprogress BLOCKED by #103; the
+    # failure is swallowed and the next fly→done lands it task→done with NO IP
+    # hop. The guards are the documented BOARD_SKIP_DECOMPOSE_CHECK bypass case.
+    env = {**os.environ, "BOARD_SKIP_DECOMPOSE_CHECK": "1"}
     try:
-        out = subprocess.run(args, capture_output=True, text=True, timeout=8)
+        out = subprocess.run(args, capture_output=True, text=True, timeout=8, env=env)
     except subprocess.SubprocessError:
         return False
     return out.returncode == 0
