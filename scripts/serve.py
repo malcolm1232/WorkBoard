@@ -408,6 +408,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_index()
         elif path == "/board.json":
             self._send_file(self.board_dir / "board.json", "application/json")
+        elif path == "/rev":
+            self._handle_rev()
         elif path == "/index.json":
             self._handle_index_json()
         elif path == "/metrics":
@@ -426,6 +428,22 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_archive(path)
         else:
             self._send(404, b'{"error":"not found"}')
+
+    def _handle_rev(self):
+        """GET /rev — just the current board rev (~15 bytes), so the browser's 3s
+        poll can detect changes without re-fetching the whole board.json (#552).
+        Reads the in-memory cache (kept current by every POST when the server is
+        up); falls back to the file. The client also does a periodic full fetch,
+        so a momentarily stale rev self-heals."""
+        rev = 0
+        try:
+            if _cached_state is not None:
+                rev = _cached_state.get("rev", 0) or 0
+            else:
+                rev = json.loads((self.board_dir / "board.json").read_text()).get("rev", 0) or 0
+        except Exception:
+            rev = 0
+        self._send(200, json.dumps({"rev": rev}).encode())
 
     def _handle_index(self):
         """GET / or /board.html — serve the board UI."""

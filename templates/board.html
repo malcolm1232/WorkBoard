@@ -1647,6 +1647,7 @@
 // v3: board.json is read/written via HTTP fetch to the local board-steward server
 // (same origin). No File System Access API, no IndexedDB. Works in any browser.
 const BOARD_URL = '/board.json';
+const REV_URL = '/rev';   // #552 — cheap rev probe so the 3s poll doesn't re-fetch the whole board
 let state = null;
 let lastRev = 0;
 let saveTimer = null;
@@ -3315,6 +3316,7 @@ function isUserEditing() {
   const a = document.activeElement;
   return a && (a.isContentEditable || a.tagName === 'TEXTAREA' || a.tagName === 'INPUT');
 }
+let _pollTick = 0;
 function startPoll() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
@@ -3323,6 +3325,21 @@ function startPoll() {
     if (isUserEditing()) return;
     if (isDragInProgress()) return;   // #494 — never rebuild the DOM mid-drag
     try {
+      // #552 — cheap rev-check FIRST. The full board.json can be 700KB+; fetching
+      // it every 3s just to compare rev wasted bandwidth + a JSON.parse. Now: hit
+      // the tiny /rev endpoint; only fetch the full board when rev actually moved.
+      // Every 20th tick (~60s) we fetch full regardless, so a stale /rev (e.g. a
+      // direct file write) self-heals. /rev unavailable → fall through to full.
+      _pollTick++;
+      if (_pollTick % 20 !== 0) {
+        try {
+          const rr = await fetch(REV_URL, { cache: 'no-store' });
+          if (rr.ok) {
+            const j = await rr.json();
+            if ((j.rev || 0) === lastRev) return;   // unchanged → skip the 700KB fetch
+          }
+        } catch (_) { /* /rev down → fall through to the full fetch below */ }
+      }
       const r = await fetch(BOARD_URL, { cache: 'no-store' });
       if (!r.ok) return;
       const incoming = await r.json();
