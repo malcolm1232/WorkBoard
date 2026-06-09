@@ -2774,6 +2774,12 @@ function deleteColumn(id) {
   state.cards.forEach(c => {
     if (c.column === id) { c.column = 'backlog'; c.updatedAt = now(); moved++; }
   });
+  // #538 — re-link any columns STACKED UNDER this one to its parent (or promote
+  // to root if it was a root). Without this their stackUnder dangles to the
+  // deleted id, so getStackRoots/walkStack drop them and the stacked-below
+  // column visually DISAPPEARS.
+  const parentOfDeleted = col.stackUnder || null;
+  state.columns.forEach(c => { if (c.stackUnder === id) c.stackUnder = parentOfDeleted; });
   state.columns = state.columns.filter(c => c.id !== id);
   scheduleSave(); render();
   toast(moved > 0
