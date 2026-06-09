@@ -3138,6 +3138,26 @@ function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => save('user'), 400);
 }
+// #531 — flush a pending (debounced) save when the tab is hidden/closed, so a
+// card added or edited in the last 400ms before refresh / session-close / nav
+// isn't silently lost (the "I added a card and it's gone" bug). sendBeacon (or
+// fetch keepalive) survives unload, unlike the normal async save().
+function flushSave() {
+  if (!pendingDirty || !state) return;
+  clearTimeout(saveTimer);
+  state.rev = (state.rev || 0) + 1;
+  state.savedAt = new Date().toISOString();
+  state.savedBy = 'user';
+  lastRev = state.rev;
+  const body = JSON.stringify(state);
+  try {
+    const blob = new Blob([body], { type: 'application/json' });
+    if (navigator.sendBeacon && navigator.sendBeacon(BOARD_URL, blob)) { pendingDirty = false; return; }
+  } catch (_) {}
+  try { fetch(BOARD_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }); pendingDirty = false; } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
+window.addEventListener('pagehide', flushSave);
 
 // ===== Undo / Redo =====
 // Snapshot strategy: deep-clone the mutable parts of state (cards, columns,
