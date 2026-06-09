@@ -2072,21 +2072,6 @@ function logEvent(kind, summary, card, via) {
   _logsBufSaveSoon();
   _renderLogLine(entry);
 }
-// #564 — one-shot green flash on a SINGLE card by id (the card the user just
-// changed). Deferred a frame so it runs AFTER any DOM move (simulateUserDragMove)
-// has placed the node; the remove→reflow→add restarts the CSS animation even if
-// the class was already present. This is the deliberate "I changed this one" cue
-// — distinct from the poll/SSE flash for remote changes.
-function flashCard(id) {
-  requestAnimationFrame(() => {
-    const el = (typeof findCardEl === 'function') ? findCardEl(id) : null;
-    if (!el) return;
-    el.classList.remove('flashing');
-    void el.offsetWidth;            // force reflow → restart the animation
-    el.classList.add('flashing');
-    setTimeout(() => el.classList.remove('flashing'), 1300);
-  });
-}
 document.addEventListener('DOMContentLoaded', () => {
   _dbgHud();
   dbg('HUD ready — drag a column (grip) or a card');
@@ -2751,7 +2736,6 @@ function commitCardDrag() {
   refreshColumnCount(targetCol);
   if (srcCol && srcCol !== targetCol) refreshColumnCount(srcCol);
   refreshActiveWork();   // #254 — repaint pulse (this path skips render())
-  flashCard(card.id);    // #564 — green-flash the card YOU just dragged (only it)
 }
 
 // Canonical NON-DRAG move — the one source of truth for moving a card to a
@@ -2790,10 +2774,8 @@ function moveCardToColumn(card, targetCol) {
   if (oldEl && !_animSuppressed()) {
     simulateUserDragMove(card, fromCol, targetCol, oldEl);
   } else {
-    _flashIds.add(card.id);   // #564 — flash the moved card on the rebuild path
-    render();
+    render();   // calendar view / animation-suppressed / node missing → plain rebuild
   }
-  flashCard(card.id);   // #564 — the card YOU moved gets the brief green flash (only it)
 }
 
 function cancelCardDrag() {
