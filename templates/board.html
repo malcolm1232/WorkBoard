@@ -5430,7 +5430,11 @@ function renderColumn(col, cards) {
 
   // Always-on × for CUSTOM columns (was: empty-only). Confirm if it has
   // cards — they'd otherwise be orphaned in state but invisible on board.
-  if (col.kind === 'custom') {
+  // #559 — but NOT the Discarded column: it's kind:'custom' (lazily created for
+  // soft-deletes) yet system-managed, not a user column — a one-click delete-× on
+  // it would orphan every discarded card. Clear it via the 🧹 (Empty Discarded).
+  const _isDiscardedCol = col.id === 'discarded' || /^discarded$/i.test(col.name || '');
+  if (col.kind === 'custom' && !_isDiscardedCol) {
     const del = document.createElement('button');
     del.className = 'icon-btn del-btn';
     del.textContent = '×';
