@@ -378,6 +378,11 @@
     display: flex;
     flex-direction: column;
     padding: 8px;
+    /* #534 — isolate each column's internal layout so a column reorder / FLIP
+       getBoundingClientRect doesn't force a re-layout of every other column's
+       cards (the residual column-swap lag on a big board). `layout` only — NOT
+       paint — so the active-work box-shadow glow is never clipped at the edge. */
+    contain: layout;
   }
   /* Boho per-column hue tints (hue family at ~2% off-white). */
   /* #472 — column backgrounds are assigned in JS (colBohoBg): 'done' pinned to
@@ -2502,7 +2507,10 @@ function previewReorderColumn(srcId, targetId) {
   state.columns = next;
   _colLastPreviewTargetId = targetId;
   reorderColumnsDOM();   // #534 — reuse card DOM instead of a full render() per drag frame
-  requestAnimationFrame(() => flipPlayColumns(old));
+  // #534 — SHORT glide for the live drag preview (was the 1080ms default, which
+  // overlaps across slot crossings and lags behind the cursor). The drop/commit
+  // paths keep the slower 1080ms settle.
+  requestAnimationFrame(() => flipPlayColumns(old, { duration: 250 }));
 }
 
 // #117 — stack `srcId` directly under `parentId`. Refuses to create a cycle
@@ -5384,7 +5392,7 @@ function renderColumn(col, cards) {
         state.columns = JSON.parse(JSON.stringify(_colDragSnapshot));
         _colLastPreviewTargetId = null;
         reorderColumnsDOM();   // #534 — light reorder, not a full card rebuild
-        requestAnimationFrame(() => flipPlayColumns(oldR));
+        requestAnimationFrame(() => flipPlayColumns(oldR, { duration: 250 }));   // #534 — snappy preview
         dbg('col preview reverted — back to origin');
         return;
       }
@@ -5401,7 +5409,7 @@ function renderColumn(col, cards) {
         state.columns = JSON.parse(JSON.stringify(_colDragSnapshot));
         _colLastPreviewTargetId = null;
         reorderColumnsDOM();   // #534 — light reorder, not a full card rebuild
-        requestAnimationFrame(() => flipPlayColumns(old));
+        requestAnimationFrame(() => flipPlayColumns(old, { duration: 250 }));   // #534 — snappy preview
       }
     } else {
       el.classList.remove('col-drop-stack-target');
