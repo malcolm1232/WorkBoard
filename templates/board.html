@@ -2496,8 +2496,19 @@ function reflowCardDragPreview() {
   // Finish any in-flight card FLIPs so the next captureCardRects measures
   // settled positions, not mid-animation transforms (was causing vibration
   // when dragover fired faster than animations completed).
+  // #503 — only settle FINITE animations (the FLIP transitions). The active-work
+  // pulse runs `infinite`, and Animation.finish() THROWS InvalidStateError on an
+  // infinite effect ("Cannot finish Animation with an infinite target effect") —
+  // that exception used to abort this whole reflow on every dragover the moment
+  // any card was pulsing, which IS the "can't drag while a card pulses" freeze.
+  // try/catch as a belt-and-suspenders so no animation can ever break the drag.
   document.querySelectorAll('.card[data-card-id]').forEach(c => {
-    c.getAnimations().forEach(a => a.finish());
+    c.getAnimations().forEach(a => {
+      try {
+        if (a.effect && a.effect.getComputedTiming().iterations === Infinity) return;
+        a.finish();
+      } catch (_) { /* never let settling an animation abort the drag */ }
+    });
   });
   const rects = captureCardRects();
   targetCol.insertBefore(_cardDrag.srcEl, wantNextEl);
