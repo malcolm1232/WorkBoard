@@ -44,6 +44,12 @@ animation contract (~320ms glide + 400ms pause so chained flies don't race the b
 flags: `--note`, `--writeup`/`--writeup-stdin`, `--subtask`, `--bug`, `--improve`. The old `move` was
 removed because it jumped. **No "want me to add a card?" prompt — just do it.**
 
+> **Why this matters — it's the whole point, not overhead.** The board's entire value is being a
+> *faithful, live mirror* of the user's work: what's in flight right now, what shipped, what's parked.
+> A batched or mis-shaped card silently erases that — and the user ends up asking "did we do X?" with
+> no ground truth. Getting these laws right is the single highest-leverage thing you do for the user
+> here. Treat it as core to the task, and put in the effort to follow them exactly.
+
 ### The three laws (the front of the lifecycle is 100% discipline — nothing enforces it)
 
 1. **Declare, don't record.** The card exists *and* is `fly inprogress` **before the first edit** —
@@ -58,6 +64,9 @@ removed because it jumped. **No "want me to add a card?" prompt — just do it.*
    Declaring up front (law #1) is still 100% on you.
 
 ### Shape → pattern (LAW — every unit MUST match exactly one of these rows)
+
+> **Get the shape right and the board stays a clean, glanceable mirror for the user — this is the
+> structural heart of live carding; spend the few seconds to match the row exactly.**
 
 > **The master discriminator is THE HEADER TEST.** Before choosing a shape, ask:
 > *can I write **one honest label** that covers all the parts in front of me?*
