@@ -139,18 +139,20 @@ Each batch = solve → reinstall → verify. Ordered by "fixes the most, lowest 
 - **Verify after:** reinstall + archive sweep → `index.json` ≤48 KB;
   `sim_60d --strict` passes.
 
-### BATCH 4 — Extraction source-selection + engine choice
-- **#322** *(SU)* — Source-selection by availability (git > convo > jsonl). Not
-  implemented (`SOURCES` param exists, no availability-ranked fallback chain).
-  Follow-on to #321.
-- **#277** *(SU)* — Run a 60-day sim **haiku vs inline** and compare; you suspect
-  inline is "already so much faster" even at 1 day and haiku may be unnecessary.
-  Decision-experiment; couples with #87's sim harness.
-- **#264 BOARD-DEMO-LIGHT** *(SU)* — Rework demo fly to be compute-light (current
-  demo fires one `claude -p` Haiku call per bucket). You explicitly deferred this
-  ("later we'll make it compute-light").
-- **Verify after:** extraction picks the best available source per project;
-  engine decision recorded.
+### BATCH 4 — Extraction source-selection + engine choice  ✅ CLOSED 2026-06-09 (all obsolete)
+> Reviewed against the code with the user; all three cards retired (flown done w/ rationale). Nothing to build.
+- **#322** — CLOSED (resolved-in-practice). `discover2.py` already resolves the
+  harvest source with a graceful fallback chain (configured `convo_dir` →
+  `_mine_convo_dir` → legacy candidate dirs → `None`), so extraction never assumes
+  all sources exist (verified via /code-review). The formal git>convo>jsonl
+  source-TYPE ranking wasn't separately built, but the robustness goal is met.
+- **#277** — CLOSED (obsolete). The 'inline' extraction path is RETIRED
+  (`hourly_extractor.py:991`, `serve_bootstrap.py:447` — `--mode` dropped
+  'inline'). Everything is Haiku now → no inline arm to compare. Moot.
+- **#264 BOARD-DEMO-LIGHT** — CLOSED (resolved). The demo is compute-light by
+  DEFAULT (`./install.sh --demo` = inline staging, main Claude fills, no Haiku);
+  the `claude -p` Haiku-per-bucket only fires with the explicit `--fill haiku`
+  autonomous option. A light path already exists; Haiku cost is opt-in.
 
 ### BATCH 5 — SKILL.md slimming / phase-conditional loading + token cost
 - **#202 BOARD-SKILL-SLIM** *(IP)* — SKILL.md is **~5,493 tok** (284 lines) vs the
