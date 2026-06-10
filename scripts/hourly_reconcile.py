@@ -341,16 +341,27 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
             return 0
 
         n_moved = 0
+        n_skipped = 0
         for m in moves:
             num = m.get("num")
             target = m.get("target")
             reason = (m.get("reason") or "")[:160]
             if not isinstance(num, int) or target not in (
                     "task", "backlog", "inprogress", "done", "super-urgent"):
+                # #566 subtask 3 — surface (don't silently drop) a malformed move:
+                # a non-int num or a target column the model invented.
+                n_skipped += 1
+                print(f"  recon: SKIP malformed move num={num!r} target={target!r}"
+                      f" — non-int num or unknown target column", file=sys.stderr)
                 continue
             # Find current column
             cur = next((c for c in candidates if c["num"] == num), None)
             if not cur:
+                # #566 subtask 3 — model named a card # not in the reconcile set
+                # (hallucinated, or an already-done / stale num).
+                n_skipped += 1
+                print(f"  recon: SKIP #{num} → {target} — not in the reconcile "
+                      f"candidate set (hallucinated/stale num)", file=sys.stderr)
                 continue
             if cur["column"] == target:
                 continue
@@ -378,13 +389,28 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
                 args += ["--note", f"Recon → {target}: {reason}"]
             try:
                 out = subprocess.run(args, capture_output=True, text=True, timeout=8)
-            except subprocess.SubprocessError:
+            except subprocess.SubprocessError as e:
+                # #566 subtask 3 — fly subprocess errored; was dropped with no trace.
+                n_skipped += 1
+                print(f"  recon: SKIP #{num} → {target} — card.py fly errored ({e})",
+                      file=sys.stderr)
                 continue
             if out.returncode == 0:
                 n_moved += 1
                 print(f"  recon: #{num} → {target}  ({reason[:60]})",
                       file=sys.stderr)
-        print(f"  recon: {n_moved} card(s) moved", file=sys.stderr)
+            else:
+                # #566 subtask 3 — fly was REJECTED (guard / bad target / race);
+                # previously this just vanished from the count with no explanation.
+                n_skipped += 1
+                err = (out.stderr or out.stdout or "").strip().replace("\n", " ")[:80]
+                print(f"  recon: SKIP #{num} → {target} — card.py fly rc="
+                      f"{out.returncode}: {err}", file=sys.stderr)
+        if n_skipped:
+            print(f"  recon: {n_moved} card(s) moved, {n_skipped} skipped "
+                  f"(see SKIP lines above)", file=sys.stderr)
+        else:
+            print(f"  recon: {n_moved} card(s) moved", file=sys.stderr)
         _emit_progress(card_py, board, 1, 1,
                        f"✓ {n_moved} card(s) brought up to date", "reconcile",
                        final=True)

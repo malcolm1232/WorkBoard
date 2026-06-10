@@ -198,7 +198,7 @@ Column routing rules:
 - "inprogress" → files were edited but no ship hit
 - "task"       → mentioned, named, planned but no edits yet
 - "backlog"    → deferred / open / undone: user said "later" / "next session" / "tomorrow" / "defer" / "pending" / "we'll revisit" / "nvm save it", OR the work was started but explicitly NOT finished
-- "notes"      → captured observation / idea / decision, NOT a unit of work to ship
+- "notes"      → a GENUINE, durable observation / idea / decision worth keeping (e.g. "decided stop-loss stays bar-close only"). NOT a dumping ground: an actionable user need (bug report / feature request / complaint) is a "task" (or "bug"), NOT a note; a raw conversational fragment or an assistant message is NOT a note at all — skip it. If unsure whether something is a real note, OMIT it.
 
 Route to the unit's FINAL observed state across the WHOLE log below, not the moment it was first mentioned: if a commit sha or ship phrase for this unit appears ANYWHERE in the activity (even if the unit was merely *named* or *planned* earlier), it is "done" — don't leave it in "task"/"inprogress" just because the mention came before the ship. (Getting the final column right here is what keeps the later reconcile pass from having to move it.)
 
@@ -213,6 +213,8 @@ Lifecycle transitions (reconstruct the TRUE path, not just the final state):
 
 Quality bar:
 - Skip conversational micro-turns ("yes", "ok", "stop", "open the board", "rerun"). They are NOT cards.
+- NEVER card an ASSISTANT message as a unit of work. Status updates, recaps, "all wrapped up…", end-of-session summaries / carry-forwards, and the assistant's own narration are NOT deliverables — skip them entirely. Cards come from WORK that happened and from the USER's needs, never from the assistant's prose.
+- A user's bug report / feature request / complaint IS a need → card it as "task" (tag "bug" if it's a defect), with a SUMMARIZED verb+noun title — NEVER paste the raw user message as the title, and NEVER bury it under "notes" (notes is for durable decisions/observations, not actionable needs).
 - Skip AMBIGUOUS / NON-DELIVERABLE activity: if you cannot name a concrete deliverable, or the purpose is unclear from the log (e.g. "edited some files, purpose unknown / likely scaffolding"), or it's a vague stub with no concrete subject ("test verification", "validation", "do the thing"), DO NOT card it — that's noise, not a unit of work. When the deliverable is unclear, OMIT it rather than carding a placeholder.
 - One unit of work = one card. If the user asked about feature X, you built it, and they reviewed it — that is ONE card titled by what X is.
 - If two units of work happened in the same hour, return two cards.

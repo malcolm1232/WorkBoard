@@ -250,6 +250,35 @@ def _iso(s):
         return None
 
 
+# #566 subtask 1 — autonomous (non-interactive) board movers. A rev bump caused
+# ONLY by these must NOT be credited as "this session carded its work": the
+# background hourly reconcile sweep tags its moves via='harvest' and auto-ship
+# tags via='autoship'. An interactive card.py call (main Claude / reconciliation /
+# undo) tags agent/recon/undo/etc.
+_AUTONOMOUS_VIA = {"harvest", "autoship"}
+
+
+def _genuine_card_event_since(cards: list, since) -> bool:
+    """True iff some card's history has a mutation AFTER `since` that was a
+    genuine (interactive) card action — NOT a background reconcile / auto-ship
+    move (via in _AUTONOMOUS_VIA). Windows the 'board changed' signal to THIS
+    session: a BETWEEN-SESSION background reconcile advances board.rev via
+    'harvest' moves, which the old raw rev-delta check wrongly credited as this
+    session having carded its work — the #560 audit's missed-gap edge. `since`
+    None → False (no baseline window yet; the caller's prev_rev-is-None seeding
+    path handles the first encounter)."""
+    if since is None:
+        return False
+    for c in cards:
+        for h in (c.get("history") or []):
+            if h.get("via") in _AUTONOMOUS_VIA:
+                continue
+            at = _iso(h.get("at"))
+            if at and at > since:
+                return True
+    return False
+
+
 def detect_batched(cards: list, since) -> list:
     """Cards that reached Done with no real in-flight dwell — the batched-not-live
     smell (#74). A card is batched if it was BORN in Task (live work, not a
@@ -336,12 +365,14 @@ def main() -> int:
     # dwell. Advisory only — never blocks (a batched card is correct end-state,
     # just not live-tracked); surfacing it is what makes the miss self-correct.
     batched = detect_batched(cards, prev_at)
-    rev_advanced = (isinstance(cur_rev, int) and isinstance(prev_rev, int)
-                    and cur_rev > prev_rev)
-    # Carded if the board actually changed (rev) OR a literal marker was seen
-    # (belt-and-suspenders). Seeding turn (no prior baseline) counts as carded
-    # so we never false-block before the baseline exists.
-    carded = rev_advanced or act["card_actions"] > 0 or prev_rev is None
+    # Carded if a literal card.py marker was seen this turn (transcript), OR the
+    # board genuinely changed since the last sign-off via an INTERACTIVE action
+    # (#566 subtask 1: a between-session background reconcile bumps rev via
+    # 'harvest' moves — that must NOT count, so we attribute the change by history
+    # via, not the raw rev delta). Seeding turn (no prior baseline) counts as
+    # carded so we never false-block before the baseline exists.
+    genuine_mutation = _genuine_card_event_since(cards, prev_at)
+    carded = act["card_actions"] > 0 or genuine_mutation or prev_rev is None
 
     # Findings — windowed to THIS turn (act) + state-based carding. An existing
     # In-Progress card means the unit IS declared live (#78): the cross-turn

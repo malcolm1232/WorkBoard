@@ -176,6 +176,104 @@ def queue_pop(board: Path) -> dict | None:
         return None
 
 
+# ---- #566 subtask 2: content-correlated pairing ----------------------------
+# Blind FIFO pop pairs a SubagentStop with the OLDEST spawn entry. Correct for
+# SEQUENTIAL subagents, but TRULY PARALLEL subagents finish out of order, so the
+# oldest entry is the wrong sibling → the writeup lands on the wrong card. Fix:
+# correlate a stop to ITS spawn by the subagent's task-prompt signature (the
+# subagent's own first user message == the prompt it was spawned with), and pop
+# THAT entry. Falls back to oldest (legacy FIFO) when nothing correlates, so the
+# sequential case and any correlation-miss are never worse than before.
+_CORR_MIN = 30          # min signature overlap (chars) to trust a correlation
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _first_user_prompt(path: Path) -> str:
+    """The text of the FIRST genuine user message in a (subagent) transcript —
+    i.e. the task prompt it was spawned with. Skips tool_result 'user' lines."""
+    try:
+        with path.open("r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if o.get("type") != "user":
+                    continue
+                msg = o.get("message") or {}
+                c = msg.get("content")
+                if isinstance(c, str):
+                    return c
+                if isinstance(c, list):
+                    has_tr = any(isinstance(b, dict) and b.get("type") == "tool_result"
+                                 for b in c)
+                    txt = " ".join(b.get("text", "") for b in c
+                                   if isinstance(b, dict) and b.get("type") == "text")
+                    if txt and not has_tr:
+                        return txt
+    except OSError:
+        pass
+    return ""
+
+
+def _corr_score(psig: str, tsig: str) -> int:
+    """Overlap between a spawn signature and a stop signature. Containment (one is
+    a substring of the other — handles the spawn's truncation / any harness
+    preamble) scores the shorter length; else the common-prefix length."""
+    if not psig or not tsig:
+        return 0
+    if psig in tsig or tsig in psig:
+        return min(len(psig), len(tsig))
+    n = 0
+    for x, y in zip(psig, tsig):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def queue_pop_correlated(board: Path, tsig: str) -> dict | None:
+    """Pop the queue entry whose stored psig best correlates with `tsig` (the
+    finished subagent's first-prompt signature). Falls back to oldest (FIFO) when
+    nothing clears _CORR_MIN — preserving legacy behaviour for sequential runs."""
+    qp = queue_path(board)
+    try:
+        lines = [ln for ln in qp.read_text(errors="replace").splitlines() if ln.strip()]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    entries = []
+    for ln in lines:
+        try:
+            entries.append(json.loads(ln))
+        except Exception:
+            entries.append(None)
+    idx, best = None, 0
+    if tsig:
+        for i, e in enumerate(entries):
+            if not isinstance(e, dict):
+                continue
+            score = _corr_score(e.get("psig") or "", tsig)
+            if score >= _CORR_MIN and score > best:
+                best, idx = score, i
+    if idx is None:
+        idx = 0                                   # FIFO fallback (oldest)
+    popped = entries[idx]
+    rest = [lines[i] for i in range(len(lines)) if i != idx]
+    try:
+        qp.write_text(("\n".join(rest) + "\n") if rest else "")
+    except OSError:
+        pass
+    return popped if isinstance(popped, dict) else None
+
+
 # ---- spawn (PreToolUse 'Agent') --------------------------------------------
 
 def do_spawn(payload: dict) -> None:
@@ -185,6 +283,7 @@ def do_spawn(payload: dict) -> None:
     desc = (ti.get("description") or "subagent task").strip()[:80]
     stype = (ti.get("subagent_type") or "subagent").strip()
     prompt = (ti.get("prompt") or "").strip().replace("\n", " ")[:200]
+    psig = _norm(prompt)[:160]                # #566 subtask 2 — correlation key
     cwd = payload.get("cwd") or ""
     if not cwd:
         return
@@ -198,7 +297,8 @@ def do_spawn(payload: dict) -> None:
 
     # Read-only recon -> don't card, but keep FIFO aligned with a skip marker.
     if stype.lower() in SKIP_TYPES:
-        queue_push(board, {"skip": True, "type": stype, "desc": desc, "ts": _now()})
+        queue_push(board, {"skip": True, "type": stype, "desc": desc,
+                           "ts": _now(), "psig": psig})
         return
 
     if mode == "subtask":
@@ -207,17 +307,17 @@ def do_spawn(payload: dict) -> None:
         parent = active_card_num(board)
         if parent is None:
             queue_push(board, {"skip": True, "type": stype, "desc": desc,
-                               "ts": _now(), "note": "no-active-card"})
+                               "ts": _now(), "note": "no-active-card", "psig": psig})
             return
         out = run_card(board, ["subtask", "add", parent,
                                f"[subagent:{stype}] {desc}"])
         ms = SID_RE.search(out)
         if not ms:
             queue_push(board, {"skip": True, "type": stype, "desc": desc,
-                               "ts": _now(), "note": "subtask-add-failed"})
+                               "ts": _now(), "note": "subtask-add-failed", "psig": psig})
             return
         queue_push(board, {"parent": parent, "sid": ms.group(1),
-                           "type": stype, "desc": desc, "ts": _now()})
+                           "type": stype, "desc": desc, "ts": _now(), "psig": psig})
         return
 
     # mode == "collab": own child card, linked to the epic if one is set.
@@ -233,12 +333,12 @@ def do_spawn(payload: dict) -> None:
         # Card add failed — record a skip marker so the matching stop is a no-op
         # rather than popping (and flying) some unrelated card.
         queue_push(board, {"skip": True, "type": stype, "desc": desc,
-                           "ts": _now(), "note": "add-failed"})
+                           "ts": _now(), "note": "add-failed", "psig": psig})
         return
     num = m.group(1)
     run_card(board, ["fly", num, "inprogress", "--pause-ms", "120"])
     queue_push(board, {"card": num, "type": stype, "desc": desc,
-                       "ts": _now(), "epic": epic})
+                       "ts": _now(), "epic": epic, "psig": psig})
 
 
 # ---- stop (SubagentStop) ---------------------------------------------------
@@ -296,7 +396,12 @@ def do_stop(payload: dict) -> None:
         return
     if resolve_mode(board) == "off":
         return                            # spawn pushed nothing; nothing to pop
-    entry = queue_pop(board)
+    # #566 subtask 2 — correlate this stop to ITS spawn by task-prompt signature
+    # (the subagent's own first user message), so parallel out-of-order finishes
+    # pair their writeup to the right card instead of by blind FIFO position.
+    transcript = payload.get("transcript_path") or ""
+    tsig = _norm(_first_user_prompt(Path(transcript)))[:200] if transcript else ""
+    entry = queue_pop_correlated(board, tsig)
     if entry is None or entry.get("skip"):
         # No working card to close (read-only subagent, add-failure, no active
         # card in subtask mode, or an orphaned stop). Silent — never invent one.
@@ -312,7 +417,6 @@ def do_stop(payload: dict) -> None:
     if not num:
         return
 
-    transcript = payload.get("transcript_path") or ""
     act = (scan_subagent_transcript(Path(transcript))
            if transcript else {"nested": [], "edits": 0, "bug": False})
 
@@ -326,8 +430,8 @@ def do_stop(payload: dict) -> None:
     if act["bug"]:
         parts.append("WARN output contained an explicit bug/traceback marker — "
                      "review and file a bug card if real.")
-    parts.append("(Auto-carded by SubagentStop hook; FIFO-correlated — verify "
-                 "pairing if subagents ran in parallel.)")
+    parts.append("(Auto-carded by SubagentStop hook; paired to its spawn by "
+                 "task-prompt signature — parallel-safe, FIFO only as fallback.)")
     writeup = " ".join(parts)
 
     fly_args = ["fly", num, "done", "--writeup", writeup, "--pause-ms", "120"]
