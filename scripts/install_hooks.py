@@ -200,7 +200,9 @@ def main() -> int:
                          "auto-open) + user-prompt-submit (per-turn LIVE nudge #360) + "
                          "pre-tool-use (flash + #102 auto-link) + card-before-edit "
                          "(#75 non-blocking 'declare a card before editing' WARN) + stop "
-                         "(blocking sign-off backstop #279/#359). 'both' = session-start + "
+                         "(advisory sign-off backstop #279/#359/#592 — writes a "
+                         "recon note for next session; set BOARD_STEWARD_STRICT=1 "
+                         "for same-turn blocking). 'both' = session-start + "
                          "user-prompt-submit only (legacy 2-hook alias). Or pass a single "
                          "hook name.")
     ap.add_argument("--dry-run", action="store_true")

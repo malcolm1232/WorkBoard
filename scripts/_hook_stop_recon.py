@@ -31,6 +31,8 @@ Claude reconciles with full context. Non-blocking, silent-fail, exit 0 always.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,9 +47,21 @@ except Exception:       # never let a missing helper break the Stop hook
 
 EDIT_TOOLS = {"edit", "write", "multiedit", "notebookedit"}
 EDIT_THRESHOLD = 3          # this many edits w/ no card = uncarded-work signal
-SHIP_RE_WORDS = ("git commit", "shipped", "deployed", "merged", "git push")
-CARD_MARKERS = ("card.py add", "card.py move", "card.py fly", "card.py improve",
+CARD_MARKERS =("card.py add", "card.py move", "card.py fly", "card.py improve",
                 "card.py bug", "card.py auto-ship", "card.py subtask")
+# #591-A: in-repo edits to these basename patterns are session/log/scratch
+# artifacts, not project work — they must not trip the un-carded backstop even
+# though they live under project_root (the dump/log-write false positive).
+LOG_SCRATCH_RE = re.compile(
+    r"(conversation_verbatim_|conversation_raw_|session_log)", re.I)
+# #591-D: a read-only git/inspection command that merely MENTIONS a ship word
+# (e.g. `git branch --merged`, `git log --grep=shipped`) is NOT a ship. And a
+# card.py command whose --writeup quotes "shipped"/"deployed" is the carding
+# action itself — counting it as an un-carded ship-signal is doubly wrong.
+SHIP_EXCLUDE_PREFIXES = (
+    "git log", "git show", "git diff", "git status", "git branch",
+    "git fetch", "git remote", "git rev-parse", "git describe", "git blame",
+    "git stash list", "grep", "rg", "cat", "head", "tail", "curl", "echo", "ls")
 BATCH_DWELL_SEC = 30        # <this in inprogress = no real in-flight time (#74)
 
 
@@ -117,6 +131,11 @@ def _in_scope_edits(o: dict, project_root) -> int:
         if not fp:
             n += 1                       # unknown path → count (conservative)
             continue
+        # #591-A: session/log/scratch artifacts (verbatim dumps, *.log, session
+        # logs) are not project work even when they live under project_root.
+        base = Path(fp).name
+        if LOG_SCRATCH_RE.search(base) or base.endswith(".log"):
+            continue
         try:
             rp = Path(fp).resolve()
             in_scope = rp == project_root or project_root in rp.parents
@@ -125,6 +144,32 @@ def _in_scope_edits(o: dict, project_root) -> int:
         if in_scope:
             n += 1
     return n
+
+
+def _is_ship_command(cmd: str) -> bool:
+    """#591-D: True only for an actual mutating ship (commit/push/merge/deploy),
+    not a read-only command that merely MENTIONS a ship word. Conservative —
+    genuine ships still match; reads and card.py writeups never do. Evaluated
+    per pipeline/sequence segment so `git log --grep=x && git push` still counts
+    the push."""
+    for seg in re.split(r"[;&|]{1,2}", cmd.lower()):
+        seg = seg.strip()
+        if not seg:
+            continue
+        # a card.py board action (its --writeup may quote "shipped") is the
+        # carding action itself — never a ship-signal.
+        if "card.py" in seg:
+            continue
+        if seg.startswith(SHIP_EXCLUDE_PREFIXES):
+            continue
+        if "--grep" in seg or "--merged" in seg or "--no-merged" in seg:
+            continue
+        if (re.search(r"\bgit\s+commit\b", seg)
+                or re.search(r"\bgit\s+push\b", seg)
+                or re.search(r"\bgit\s+merge\b", seg)
+                or "shipped" in seg or "deployed" in seg):
+            return True
+    return False
 
 
 def _is_real_user(o: dict) -> bool:
@@ -213,7 +258,7 @@ def scan_transcript(path: Path, project_root=None) -> dict:
                     edits += _in_scope_edits(o, pr)
                     bash = _bash_cmd(o).lower()
                     if bash:
-                        if any(w in bash for w in SHIP_RE_WORDS):
+                        if _is_ship_command(bash):
                             ship_signals += 1
                         if any(m in bash for m in CARD_MARKERS):
                             card_actions += 1
@@ -456,16 +501,17 @@ def main() -> int:
     except OSError:
         pass
 
-    # BLOCKING backstop (the LIVE 100% guarantee). If this turn did substantive
-    # work but ran no card.py action, refuse to end the turn and tell Claude to
-    # card it NOW. Emitting {"decision":"block","reason":...} on stdout is the
-    # Claude Code Stop-hook contract for "don't stop yet". This can fire at most
-    # ONCE per stop: on the forced continuation Claude Code sets
-    # stop_hook_active=true, which the loop guard above short-circuits to exit 0.
-    # An inprogress-only gap (no edits/ships) is NOT blocking — it just left a
-    # deferred recon_pending.json note above, so a card legitimately in flight
-    # across sessions never traps the user.
-    if uncarded_risk:
+    # BLOCKING backstop — ADVISORY BY DEFAULT (#592). The recon_pending.json note
+    # above is always written, so a genuine un-carded miss is caught at the NEXT
+    # SessionStart regardless. The same-turn *blocking* force (refuse to stop and
+    # make Claude card it now) is opt-in via BOARD_STEWARD_STRICT=1 — it costs an
+    # extra model turn and is user-visible (the forced continuation), which is
+    # noise for shipped users. Power users who want the hard live guarantee set
+    # the env flag. When it does fire it fires at most ONCE per stop: the
+    # stop_hook_active loop-guard above short-circuits the forced continuation.
+    strict = os.environ.get("BOARD_STEWARD_STRICT", "").strip().lower() \
+        not in ("", "0", "false", "no", "off")
+    if uncarded_risk and strict:
         block_reason = (
             "Board-steward LIVE backstop: this turn made "
             f"{act['edits']} file edit(s) / {act['ship_signals']} ship-signal(s) "
