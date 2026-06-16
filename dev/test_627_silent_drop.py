@@ -32,7 +32,8 @@ from types import SimpleNamespace
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
-import hourly_extractor as H  # noqa: E402
+import hourly_extractor as H       # noqa: E402  (gate/_extract_haiku live here)
+import hourly_extract_llm as L      # noqa: E402  (#646: LLM dispatch + retry ladder seam)
 
 _fails = 0
 
@@ -51,26 +52,28 @@ def test_failure_vs_empty():
     proj = Path("/tmp/wb627-proj")
 
     # (a) genuine failure: non-zero exit → ChunkExtractionError (not []).
-    orig_digest, orig_run = H.build_digest, H.subprocess.run
-    H.build_digest = lambda *a, **k: "some work happened"
-    H.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout="")
+    # Patch in the LEAF namespace (#646): extract_cards_for_chunk resolves
+    # build_digest from hourly_extract_llm's globals after the file split.
+    orig_digest, orig_run = L.build_digest, L.subprocess.run
+    L.build_digest = lambda *a, **k: "some work happened"
+    L.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout="")
     try:
         raised = False
         try:
-            H.extract_cards_for_chunk([("10:00", [{"x": 1}])], proj)
-        except H.ChunkExtractionError:
+            L.extract_cards_for_chunk([("10:00", [{"x": 1}])], proj)
+        except L.ChunkExtractionError:
             raised = True
         check(raised, "non-zero claude exit raises ChunkExtractionError")
 
         # (b) legitimately empty bucket: empty digest → [] (no raise).
-        H.build_digest = lambda *a, **k: ""
+        L.build_digest = lambda *a, **k: ""
         try:
-            out = H.extract_cards_for_chunk([("11:00", [{"x": 1}])], proj)
+            out = L.extract_cards_for_chunk([("11:00", [{"x": 1}])], proj)
             check(out == [], "empty digest returns [] (not a failure)")
-        except H.ChunkExtractionError:
+        except L.ChunkExtractionError:
             check(False, "empty digest must NOT raise")
     finally:
-        H.build_digest, H.subprocess.run = orig_digest, orig_run
+        L.build_digest, L.subprocess.run = orig_digest, orig_run
 
 
 # ── L2: _extract_haiku records perma-fail + recovers transient-fail ──────────
@@ -84,16 +87,20 @@ def _ev(fail=False):
 
 def _run_haiku(buckets, chunks, patched_extract):
     """Drive _extract_haiku with board I/O stubbed out; return its result."""
-    saved = {n: getattr(H, n) for n in
-             ("extract_cards_for_chunk", "emit_card", "_banner_create",
-              "_banner_update", "_save_snapshot", "reconcile_sweep")}
+    # _extract_haiku lives in H; the retry ladder it drives
+    # (_extract_chunk_with_retries) lives in L and calls L.extract_cards_for_chunk
+    # — so the extraction seam is patched on L (#646), the rest on H.
+    saved_H = {n: getattr(H, n) for n in
+               ("emit_card", "_banner_create", "_banner_update",
+                "_save_snapshot", "reconcile_sweep")}
+    saved_L = {"extract_cards_for_chunk": L.extract_cards_for_chunk}
     emitted = []
 
     def fake_emit(card_py, board, card, *a, **k):
         emitted.append(card)
         return len(emitted)   # truthy card num
 
-    H.extract_cards_for_chunk = patched_extract
+    L.extract_cards_for_chunk = patched_extract
     H.emit_card = fake_emit
     H._banner_create = lambda *a, **k: None
     H._banner_update = lambda *a, **k: None
@@ -107,8 +114,10 @@ def _run_haiku(buckets, chunks, patched_extract):
             show_lifecycle=False, pace_s=0.0, reconcile=False, phase="speedup",
             will_reconcile=True)
     finally:
-        for n, v in saved.items():
+        for n, v in saved_H.items():
             setattr(H, n, v)
+        for n, v in saved_L.items():
+            setattr(L, n, v)
     return n_cards, failed, emitted
 
 

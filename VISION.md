@@ -224,6 +224,7 @@ If you find yourself responding to a substantive prompt without having read thes
    │   │
    │   ├── hourly_*                    ── BRANCH: history-extraction + reconciliation pipeline (acyclic) ──
    │   │   ├── hourly_common.py        shared helpers (bottom of the chain)
+   │   │   ├── hourly_extract_llm.py    LLM dispatch + retry ladder leaf: extract_cards_for_chunk / ChunkExtractionError (#627) / _extract_chunk_with_retries (→common only)
    │   │   ├── hourly_extractor.py     orchestration: bucket → chunk → run; also --reconcile-only (SessionStart smart-recon, gated, .recon_state.json)
    │   │   ├── hourly_emit.py          emit ONE card
    │   │   └── hourly_reconcile.py     Haiku reconcile sweep (only_discovered flag) — runs at BOOTSTRAP + SessionStart
