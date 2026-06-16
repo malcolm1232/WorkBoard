@@ -184,11 +184,41 @@ def test_gate_partial_stamp():
         check(H._replay_complete(board) is True, "gate open on clean fill")
 
 
+# ── L4 (#642): a failed completion-write must fail OPEN, never stuck-closed ───
+def test_gate_write_failure_fails_open():
+    print("L4 (#642): failed gate-write fails OPEN, never permanently stuck")
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / "board.json"
+        board.write_text("{}")
+        H._mark_replay_started(board, 2)   # gate now CLOSED (flag 0 on disk)
+        check(H._replay_complete(board) is False, "precondition: gate closed")
+
+        # Simulate a write failure during completion (disk full / perms).
+        orig = H._write_replay_state
+        H._write_replay_state = lambda *a, **k: False
+        try:
+            H._mark_replay_complete(board, failed_buckets=[])
+        finally:
+            H._write_replay_state = orig
+        # The stale closed-state file must be GONE → gate defaults open.
+        check(not H._replay_state_path(board).exists(),
+              "stale closed state removed when completion-write fails")
+        check(H._replay_complete(board) is True,
+              "gate FAILS OPEN — recon not permanently stuck (#642)")
+
+        # And once the disk recovers, a normal completion still works.
+        H._mark_replay_started(board, 2)
+        H._mark_replay_complete(board, failed_buckets=[])
+        st = json.loads(H._replay_state_path(board).read_text())
+        check(st.get("completed_card_replay") == 1, "recovery: clean complete writes 1")
+
+
 if __name__ == "__main__":
     test_failure_vs_empty()
     test_perma_fail_recorded()
     test_transient_fail_recovered()
     test_gate_partial_stamp()
+    test_gate_write_failure_fails_open()
     print()
     if _fails:
         print(f"✗ {_fails} check(s) FAILED")

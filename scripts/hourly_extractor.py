@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -411,17 +412,42 @@ def _replay_state_path(board: Path) -> Path:
     return board.parent / ".replay_state.json"
 
 
+def _write_replay_state(p: Path, state: dict) -> bool:
+    """Atomically write the replay-state file (tempfile + os.replace, so a
+    crash mid-write never leaves a torn JSON). Returns False on OSError — the
+    caller decides the fail-safe DIRECTION (#642), since the two gate writes
+    fail safely in opposite directions."""
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".replay_",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(state))
+            os.replace(tmp, p)
+        finally:
+            try:
+                os.unlink(tmp)   # no-op after a successful replace
+            except OSError:
+                pass
+        return True
+    except OSError:
+        return False
+
+
 def _mark_replay_started(board: Path, n_days: int) -> None:
     """Open the gate's 'in progress' state: completed_card_replay = 0. Called
-    at the top of the tier-fly bootstrap, before any card flies in."""
-    try:
-        _replay_state_path(board).write_text(json.dumps({
-            "completed_card_replay": 0,
-            "n_days": int(n_days),
-            "started_at": datetime.now(timezone.utc).isoformat(),
-        }))
-    except OSError:
-        pass
+    at the top of the tier-fly bootstrap, before any card flies in.
+
+    #642: if the write fails, the gate file simply isn't created → _replay_complete
+    defaults OPEN → recon just isn't gated during this fill (the milder, pre-gate
+    behavior). That's the safe direction here — never a permanent block."""
+    if not _write_replay_state(_replay_state_path(board), {
+        "completed_card_replay": 0,
+        "n_days": int(n_days),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }):
+        print("  ! could not write replay-state at start; recon gate disabled "
+              "for this fill (#642)", file=sys.stderr)
 
 
 def _mark_replay_complete(board: Path,
@@ -442,10 +468,17 @@ def _mark_replay_complete(board: Path,
     state["completed_at"] = datetime.now(timezone.utc).isoformat()
     state["partial"] = bool(failed_buckets)
     state["failed_buckets"] = list(failed_buckets or [])
-    try:
-        p.write_text(json.dumps(state))
-    except OSError:
-        pass
+    if not _write_replay_state(p, state):
+        # #642: leaving completed_card_replay=0 on disk would PERMANENTLY disable
+        # recon for this board — every future SessionStart recon would stand down
+        # forever (the gate never reopens). Fail OPEN: remove the stale state file
+        # so _replay_complete defaults to True. A re-bootstrap can re-stamp it.
+        print("  ! could not write replay-state at complete; failing gate OPEN "
+              "to avoid permanently-stuck recon (#642)", file=sys.stderr)
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _replay_complete(board: Path) -> bool:
