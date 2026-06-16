@@ -760,87 +760,100 @@ def _extract_haiku(project: Path, board: Path, card_py: Path,
             time.sleep(pace_s)
         return emitted
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_extract_chunk_with_retries, c, buckets,
-                        project, bucket_min): c
-            for c in chunks
-        }
-        completed = 0
-        # Emit cards as chunks finish (no chronological ordering — per user
-        # 5/28: 'dont worry about rearranging, we can arrange by time later').
-        for fut in as_completed(futures):
-            chunk_keys = futures[fut]
-            label_summary = " + ".join(_bucket_label(k, bucket_min)
-                                       for k in chunk_keys)
-            try:
-                cards = fut.result()
-            except ChunkExtractionError:
-                # Genuine extraction failure (not an empty bucket) — record the
-                # buckets for the recovery pass instead of swallowing as 0 cards.
-                cards = []
-                failed_buckets.extend(chunk_keys)
-                print(f"  ! chunk FAILED (recorded for retry): [{label_summary}]",
+    # #638: keep the HUD alive for the whole window. The per-chunk _banner_update
+    # covers normal progress; this heartbeat fills the GAPS so the number never
+    # looks frozen — a slow/retrying chunk that holds up as_completed for tens of
+    # seconds, or the recovery pass below (no per-iteration emit). The status
+    # lambda reads completed/n_cards live (hoisted above so it never NameErrors).
+    completed = 0
+    with progress_heartbeat(
+            card_py, board,
+            lambda: (completed, len(chunks),
+                     f"{cards_offset + n_cards} card(s) emitted so far"),
+            phase=phase) as pulse:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_extract_chunk_with_retries, c, buckets,
+                            project, bucket_min): c
+                for c in chunks
+            }
+            # Emit cards as chunks finish (no chronological ordering — per user
+            # 5/28: 'dont worry about rearranging, we can arrange by time later').
+            for fut in as_completed(futures):
+                chunk_keys = futures[fut]
+                label_summary = " + ".join(_bucket_label(k, bucket_min)
+                                           for k in chunk_keys)
+                try:
+                    cards = fut.result()
+                except ChunkExtractionError:
+                    # Genuine extraction failure (not an empty bucket) — record the
+                    # buckets for the recovery pass instead of swallowing as 0 cards.
+                    cards = []
+                    failed_buckets.extend(chunk_keys)
+                    print(f"  ! chunk FAILED (recorded for retry): [{label_summary}]",
+                          file=sys.stderr)
+                except Exception as e:
+                    cards = []
+                    failed_buckets.extend(chunk_keys)
+                    print(f"  ! chunk error (recorded for retry): {e}",
+                          file=sys.stderr)
+                completed += 1
+                print(f"  [{completed}/{len(chunks)}] [{label_summary}]  "
+                      f"→ {len(cards)} card(s) extracted",
                       file=sys.stderr)
-            except Exception as e:
-                cards = []
-                failed_buckets.extend(chunk_keys)
-                print(f"  ! chunk error (recorded for retry): {e}",
-                      file=sys.stderr)
-            completed += 1
-            print(f"  [{completed}/{len(chunks)}] [{label_summary}]  "
-                  f"→ {len(cards)} card(s) extracted",
-                  file=sys.stderr)
-            n_cards += _emit_chunk_cards(
-                cards, chunk_keys, board=board, card_py=card_py,
-                show_lifecycle=show_lifecycle, pace_s=pace_s)
-            # Drive the HUD after each chunk completes (the notes-column banner
-            # card is gone; banner_num is None). #327 — on the LAST chunk of a
-            # 'replay' tier (tier-2 still to come), swap the generic progress
-            # line for a "day-1 replayed in Xs · speeding up ▸▸" handoff so the
-            # HUD signals acceleration instead of flashing "✓ COMPLETE".
-            handoff = None
-            if phase == "replay" and completed == len(chunks):
-                handoff = (f"day-1 replayed in {time.monotonic() - t0:.0f}s "
-                           f"· speeding up ▸▸ backfilling older history")
-            # #327 single-HUD: the LAST chunk completes the HUD ONLY when nothing
-            # follows — i.e. no reconcile sweep (neither in-window `reconcile` nor
-            # an after-window `will_reconcile`) AND this isn't the 'replay' tier
-            # (replay always hands off to 'speedup'). Otherwise it hands off and
-            # the HUD stays visible for the next stage (no flash/disappear). Without
-            # `will_reconcile` the tier-fly speedup/solo tier wrongly flashed '✓
-            # COMPLETE' before the end-of-replay reconcile re-showed the HUD.
-            is_final = (completed == len(chunks) and not reconcile
-                        and not will_reconcile and phase != "replay")
-            _banner_update(card_py, board, banner_num,
-                           completed, len(chunks), cards_offset + n_cards,
-                           phase=phase, label_override=handoff, final=is_final)
+                n_cards += _emit_chunk_cards(
+                    cards, chunk_keys, board=board, card_py=card_py,
+                    show_lifecycle=show_lifecycle, pace_s=pace_s)
+                # Drive the HUD after each chunk completes (the notes-column banner
+                # card is gone; banner_num is None). #327 — on the LAST chunk of a
+                # 'replay' tier (tier-2 still to come), swap the generic progress
+                # line for a "day-1 replayed in Xs · speeding up ▸▸" handoff so the
+                # HUD signals acceleration instead of flashing "✓ COMPLETE".
+                handoff = None
+                if phase == "replay" and completed == len(chunks):
+                    handoff = (f"day-1 replayed in {time.monotonic() - t0:.0f}s "
+                               f"· speeding up ▸▸ backfilling older history")
+                # #327 single-HUD: the LAST chunk completes the HUD ONLY when nothing
+                # follows — i.e. no reconcile sweep (neither in-window `reconcile` nor
+                # an after-window `will_reconcile`) AND this isn't the 'replay' tier
+                # (replay always hands off to 'speedup'). Otherwise it hands off and
+                # the HUD stays visible for the next stage (no flash/disappear). Without
+                # `will_reconcile` the tier-fly speedup/solo tier wrongly flashed '✓
+                # COMPLETE' before the end-of-replay reconcile re-showed the HUD.
+                is_final = (completed == len(chunks) and not reconcile
+                            and not will_reconcile and phase != "replay")
+                _banner_update(card_py, board, banner_num,
+                               completed, len(chunks), cards_offset + n_cards,
+                               phase=phase, label_override=handoff, final=is_final)
+                pulse.touch()   # real emit → heartbeat backs off until next stall
 
-    # #627 recovery pass: one more BOUNDED attempt at each hard-failed bucket so a
-    # transient LLM error (timeout, cold-start, a flaky exit) doesn't silently
-    # drop a whole range of cards. Per-bucket granularity (the failed chunk's
-    # buckets were spread into failed_buckets). Anything still failing after this
-    # is returned up so run() can record + surface it (never silently complete).
-    if failed_buckets:
-        print(f"  ↻ recovery: retrying {len(failed_buckets)} hard-failed "
-              f"bucket(s) once more", file=sys.stderr)
-        still_failed: list[int] = []
-        for k in failed_buckets:
-            try:
-                cards = _extract_chunk_with_retries([k], buckets, project,
-                                                    bucket_min)
-            except ChunkExtractionError:
-                still_failed.append(k)
-                continue
-            n_cards += _emit_chunk_cards(
-                cards, [k], board=board, card_py=card_py,
-                show_lifecycle=show_lifecycle, pace_s=pace_s)
-        failed_buckets = still_failed
+        # #627 recovery pass: one more BOUNDED attempt at each hard-failed bucket so
+        # a transient LLM error (timeout, cold-start, a flaky exit) doesn't silently
+        # drop a whole range of cards. Per-bucket granularity (the failed chunk's
+        # buckets were spread into failed_buckets). Anything still failing after this
+        # is returned up so run() can record + surface it (never silently complete).
+        # Still under the #638 heartbeat — these retries emit no per-iteration HUD
+        # update, so the heartbeat is what keeps the bar live while they grind.
         if failed_buckets:
-            print(f"  ⚠ {len(failed_buckets)} bucket(s) UNRECOVERED: "
-                  f"[{', '.join(_bucket_label(k, bucket_min) for k in failed_buckets)}]"
-                  f" — will be recorded, NOT silently dropped (#627)",
-                  file=sys.stderr)
+            print(f"  ↻ recovery: retrying {len(failed_buckets)} hard-failed "
+                  f"bucket(s) once more", file=sys.stderr)
+            still_failed: list[int] = []
+            for k in failed_buckets:
+                try:
+                    cards = _extract_chunk_with_retries([k], buckets, project,
+                                                        bucket_min)
+                except ChunkExtractionError:
+                    still_failed.append(k)
+                    continue
+                n_cards += _emit_chunk_cards(
+                    cards, [k], board=board, card_py=card_py,
+                    show_lifecycle=show_lifecycle, pace_s=pace_s)
+            failed_buckets = still_failed
+            if failed_buckets:
+                print(f"  ⚠ {len(failed_buckets)} bucket(s) UNRECOVERED: "
+                      f"[{', '.join(_bucket_label(k, bucket_min) for k in failed_buckets)}]"
+                      f" — will be recorded, NOT silently dropped (#627)",
+                      file=sys.stderr)
 
     # Save snapshot of post-extraction state BEFORE reconciliation, so
     # offline recon testing can iterate against a stable baseline.

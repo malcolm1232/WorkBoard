@@ -486,7 +486,14 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
             _banner_update_text(card_py, board, banner_num,
                                 f"🔍 reconciling {len(candidates)} cards…")
 
-        moves = _llm_reconcile(candidates, events, done_cards)
+        # #638: _llm_reconcile is one 60-90s Haiku call with no internal progress —
+        # the single biggest HUD freeze at the end of bootstrap. Pulse a 'still
+        # working… mm:ss' tick so the bar shows liveness instead of sitting on
+        # "checking nothing's missed…" for over a minute (looks hung).
+        with progress_heartbeat(card_py, board,
+                                lambda: (0, 1, "checking nothing's missed…"),
+                                phase="reconcile"):
+            moves = _llm_reconcile(candidates, events, done_cards)
         if not moves:
             print("  recon: 0 moves", file=sys.stderr)
             _emit_progress(card_py, board, 1, 1,

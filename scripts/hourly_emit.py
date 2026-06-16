@@ -13,7 +13,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +51,73 @@ def _emit_progress(card_py: Path, board: Path, done: int, total: int,
         subprocess.run(args, capture_output=True, text=True, timeout=4)
     except subprocess.SubprocessError:
         pass
+
+
+# ---------- progress heartbeat (#638) ----------
+
+class _HudPulse:
+    """Liveness tracker for progress_heartbeat. The work thread calls .touch()
+    after each REAL HUD emit; the heartbeat thread fires a 'still working…' tick
+    only when nothing has touched it for `interval` — so it fills stalls without
+    flickering over normal per-chunk progress."""
+    def __init__(self) -> None:
+        self._last = time.monotonic()
+        self._lock = threading.Lock()
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last = time.monotonic()
+
+    def quiet_for(self) -> float:
+        with self._lock:
+            return time.monotonic() - self._last
+
+
+@contextmanager
+def progress_heartbeat(card_py: Path, board: Path, status,
+                       phase: str = "", interval: float = 5.0):
+    """#638 — keep the BOARD-LOAD HUD alive during a slow/silent stage so it never
+    freezes on a stale number (looks-hung → user force-quits mid-bootstrap). While
+    the `with` block runs, a daemon thread emits a 'still working… mm:ss' progress
+    tick whenever the stage has been quiet (no real emit) for `interval` seconds.
+
+    The two freeze zones this covers (#638): a slow/retrying Haiku chunk in
+    _extract_haiku, and the 60-90s end-of-replay reconcile (one silent _llm_reconcile
+    call). `status` is Callable[[], (done, total, base_label)] read live so the tick
+    reflects current counts. Yields the _HudPulse — call .touch() after your own
+    real emits so the heartbeat backs off and fires only during genuine stalls.
+    Best-effort: a heartbeat failure never disturbs the work."""
+    pulse = _HudPulse()
+    stop = threading.Event()
+    t0 = time.monotonic()
+    poll_s = min(1.0, max(0.05, interval))   # detect a stall within ~one interval
+
+    # Enclosing names are bound as defaults (not closed over) so the static
+    # name-audit stays strict — same convention as _extract_haiku._emit_chunk_cards.
+    def _run(card_py=card_py, board=board, status=status, phase=phase,
+             interval=interval, poll_s=poll_s, t0=t0, pulse=pulse,
+             stop=stop) -> None:
+        # Poll periodically; only emit when the stage has actually stalled.
+        while not stop.wait(poll_s):
+            if pulse.quiet_for() < interval:
+                continue
+            try:
+                done, total, base = status()
+                mm, ss = divmod(int(time.monotonic() - t0), 60)
+                tail = f"{base} · still working… {mm}:{ss:02d}" if base \
+                    else f"still working… {mm}:{ss:02d}"
+                _emit_progress(card_py, board, done, total, tail, phase)
+            except Exception:
+                pass
+            pulse.touch()   # space ticks by `interval`; don't busy-emit
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    try:
+        yield pulse
+    finally:
+        stop.set()
+        th.join(timeout=2.0)
 
 
 def _banner_create(card_py: Path, board: Path, total_chunks: int,
@@ -347,6 +416,7 @@ def emit_card(card_py: Path, board: Path, card: dict,
 
 __all__ = [
     "_banner_update_text", "_banner_create", "_banner_update", "_banner_finish",
-    "_emit_progress", "_card_add", "_card_fly", "_card_review", "_maybe_review",
+    "_emit_progress", "progress_heartbeat", "_HudPulse",
+    "_card_add", "_card_fly", "_card_review", "_maybe_review",
     "_replay_transitions", "emit_card",
 ]
