@@ -54,17 +54,19 @@ The net effect: **the user never has to ask "did you update the board?"** — an
 
 <sub>↑ The active card *throbs* in In Progress, so you always know which task Claude is on right now — even with multiple sessions running at once, each has its own pulse.</sub>
 
-### ✅ Subtasks track the real work, step by step
-Each card breaks down into the steps the agent will actually take. Subtasks tick off one by one as the work progresses — so even mid-task you can see exactly how far along Claude is (e.g. *2/4*), not just *"in progress."*
-
-![A card with 4 subtasks ticking off one by one as Claude works through them](docs/assets/actual-card-subtasks.png)
-
 ### 🐞 Bug? The card flies back out of Done — full history kept
 Found a regression in something already shipped? Just tell Claude — or run `card.py bug #N` — and the card animates **back out of Done** into In Progress with a 🐞 tag and a new subtask for the fix. The card's history shows the entire *ship → bug → fix → ship* arc, so the story is never lost.
 
 ![A card moving from Done back to In Progress with a bug tag, getting fixed, then returning to Done](docs/assets/bug-to-and-fro.gif)
 
 <sub>↑ Real life isn't a one-way street: cards loop *to and fro* through Done as bugs surface and get fixed — and every loop is on the record.</sub>
+
+### ✅ Subtasks track the real work, step by step
+Each card breaks down into the steps the agent will actually take. Subtasks tick off one by one as the work progresses — so even mid-task you can see exactly how far along Claude is (e.g. *2/4*), not just *"in progress."*
+
+![Subtasks ticking off incrementally as Claude works through them — 1/4, 2/4, 3/4, 4/4](docs/assets/subtasks-incremental.gif)
+
+![A card with subtasks expanded — every step of the work, visible at a glance](docs/assets/actual-card-subtasks.png)
 
 ### 🔗 Just say *"Do #123."*
 Every card has a number. Reference it any time — today, next week, next month — and Claude picks the work up exactly where it left off. No re-explaining context.
