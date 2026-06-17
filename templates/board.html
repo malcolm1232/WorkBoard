@@ -1793,6 +1793,7 @@ let _colDragRects = null;      // id → DOMRect at dragstart (for FLIP)
 let _cardDrag = null;          // { cardId, srcCol, srcEl, hoverCol, hoverBeforeCardId }
 let _cardDragRects = null;     // cardId → DOMRect at last reflow (for FLIP)
 let _localMoveLog = new Map(); // #518 — cardId→ts of moves logged directly, so the SSE echo doesn't double-log
+let _localEditLog = new Map(); // #548-redux — cardId→ts of local priority-chip clicks so an in-flight SSE echo can't clobber the local priority change during the 400ms scheduleSave window. Mirrors _localMoveLog for the edit path. Scoped to priority for now; title/tag edits would need their own stamps to opt in.
 // #119 — column live-reflow during drag (iPhone home-screen feel).
 // Snapshot of state.columns taken at dragstart so cancel (dragend w/o drop)
 // can revert all the live-preview reorders. _colDragSrcId carries the source
@@ -3688,6 +3689,10 @@ function makePrioChip(card) {
     const i = order.indexOf(card.priority || null);
     card.priority = order[((i < 0 ? 0 : i) + 1) % order.length];
     card.updatedAt = now();
+    // #548-redux — mark this card as locally edited so an in-flight SSE echo
+    // (e.g. a recon update for the same card) can't Object.assign the pre-edit
+    // priority back over us during the 400ms scheduleSave debounce window.
+    _localEditLog.set(card.id, Date.now());
     scheduleSave(); render();
   };
   return btn;
@@ -6488,8 +6493,29 @@ function simulateUserDragMove(card, fromColumn, toColumn, oldEl) {
 function handleCardUpdated({ card, fromColumn, toColumn }) {
   if (!state) return;
   const idx = state.cards.findIndex(c => c.id === card.id);
-  if (idx >= 0) Object.assign(state.cards[idx], card);
-  else { state.cards.push(card); }
+  // #548-redux — if the user just clicked the priority chip on this card
+  // within the last 2s, the server's incoming card may carry the PRE-edit
+  // priority (race with the 400ms scheduleSave debounce). Strip `priority`
+  // from the merge so the local cycle isn't clobbered; everything else
+  // (updatedAt, history, title, tags, server-side bookkeeping) merges
+  // normally. The 2s window auto-expires (no cleanup needed); after our own
+  // POST round-trips back, the next echo agrees with local and the guard is
+  // a no-op. Scoped to priority because that's the only edit path that
+  // stamps _localEditLog — title/tag edits would need their own stamps to
+  // be protected here.
+  const _editTs = _localEditLog.get(card.id);
+  const _editFresh = _editTs && (Date.now() - _editTs < 2000);
+  if (idx >= 0) {
+    if (_editFresh) {
+      const safe = Object.assign({}, card);
+      delete safe.priority;
+      Object.assign(state.cards[idx], safe);
+    } else {
+      Object.assign(state.cards[idx], card);
+    }
+  } else {
+    state.cards.push(card);
+  }
   if (_view !== 'board') { _refreshCalendarSoon(); return; }   // #557 live calendar
   if (isDragInProgress()) {
     // #503 — keep active-work id in sync (pure state) for an SSE move that
@@ -6524,7 +6550,10 @@ function handleCardUpdated({ card, fromColumn, toColumn }) {
     }
   } else {
     // In-place edit (title/priority/tags/subtask) — swap DOM, pulse + flash.
-    const newEl = renderCardCompact(card);
+    // #548-redux — render from MERGED state (state.cards[idx]) not the raw SSE
+    // payload, so a fresh local edit (priority/title/tags) we just protected
+    // above isn't visually re-painted with the pre-edit server value.
+    const newEl = renderCardCompact(state.cards[idx] || card);
     newEl.classList.add('flashing', 'pulsing');
     oldEl.replaceWith(newEl);
     setTimeout(() => newEl.classList.remove('flashing','pulsing'), 1300);
