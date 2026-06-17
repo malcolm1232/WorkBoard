@@ -172,7 +172,24 @@ Autostart is handled for you per-OS (`launchd` / `systemd` / Task Scheduler), so
 
 ## 🤔 How is this different from claude-mem / mem0 / letta?
 
-Those are **passive memory stores** — embeddings and recall you query. WorkBoard is a **live, enforced work-tracker**: it's not just *remembering* the past, it's keeping the present honest. The board is a glanceable kanban a human actually looks at, and hooks guarantee the agent updates it without being asked. It's also the **lightest per-prompt** of the peers benchmarked (see [`docs/TOKEN_BUDGET.md`](docs/TOKEN_BUDGET.md)). You can absolutely run both — they solve different halves of "agent memory."
+Different shape, not just different flavor.
+
+> **claude-mem stores memory. WorkBoard is a knowledge graph of work.**
+
+Memory stores embed your past conversation and recall chunks by similarity — *probabilistic*, *unstructured*, queried when you happen to remember to. WorkBoard records the *outcomes*: every card has `title` (what) · `origin` (why) · `subtasks` (how) · `writeup` (what shipped + commits + files) · `history` (the lifecycle) · `links` (to related cards). When future-Claude asks *"why did we touch auth in May?"*, it doesn't search vectors — it **walks the graph**:
+
+```
+list Done from May matching "auth"
+  → #214 "Rewrite auth middleware"
+     ↓ origin:   "Legal flagged session-token storage"
+     ↓ subtasks: 4 concrete steps
+     ↓ writeup:  commit 8a748b8 + files + verification
+     ↓ links:    #213 legal review, #221 follow-up bug
+```
+
+That traversal costs a handful of tokens. A vector store doing the same work pulls in conversation chunks the model has to re-read. WorkBoard is also the **lightest per-prompt** of the five peers measured ([`docs/TOKEN_BUDGET.md`](docs/TOKEN_BUDGET.md)) — the 130 KB+ `board.json` is *never* auto-loaded into context.
+
+But **they're complements, not competitors**: claude-mem is your memory; WorkBoard is your project ledger. Use claude-mem when you vaguely remember discussing something. Use WorkBoard when you want *"what shipped, what's open, what's the story behind it."* Honest tradeoffs (where claude-mem wins, where WorkBoard wins, when to pick which) live in **[`docs/COMPARISON.md`](docs/COMPARISON.md)**.
 
 ---
 
