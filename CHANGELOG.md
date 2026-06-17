@@ -9,6 +9,25 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.26 — Discarded fixes + collapsible Done-by-day index (#650/#651/#652/#653) (2026-06-17)
+
+- **Discarded cards no longer vanish on hard refresh (#650).** The Discarded column
+  isn't persisted in `board.json` (it's lazily created on the first soft-delete), but
+  the bootstrap declutter adds `column:'discarded'` cards server-side without creating
+  it — so on reload every discarded card (incl. the 🧹 sweep header) had no column to
+  render into and disappeared until a manual soft-delete recreated it.
+  `ensureDiscardColumnIfNeeded()` now materializes the column on every load.
+- **Redesigned the 🧹 first-run sweep divider (#651).** Was one flat emoji string in an
+  undefined `--fg` (near-invisible on the light column). Now a structured, quiet
+  divider: inline SVG broom (no emoji), real `--muted`/`--ink` tokens, a tabular count
+  pill, a hairline rule, and a short date.
+- **Collapsible Done-by-day groups + collapse-all dated index (#652).** Click a date
+  header to fold/unfold a day; a ⊟/⊞ toggle collapses all days so Done becomes a compact
+  dated index for at-a-glance wayfinding + click-to-jump (expands + scrolls into view).
+  Pure render-time filter — never touches card data, so sort/fly are unaffected.
+- **Flying/dropping a card into a collapsed Done day now lands it under its date header
+  and opens the day (#653)**, instead of dumping it at the bottom outside its group.
+
 ### 0.9.25 — First-run declutter: faster, HUD-correct, settles in place (#155/#156/#157) (2026-06-17)
 
 - **Declutter glides at 45ms/card (#155)** instead of the inherited 400ms `--pause-ms`
