@@ -1,0 +1,28 @@
+# This study dir SHIPS the harness code so anyone can reproduce the numbers.
+# It does NOT ship local/private/heavy data. Re-derive these by running
+# build_fixtures.py + run_bootstrap.py + replay_session.py (see README.md).
+
+# Frozen copy of the user's live board — may contain secrets, never commit.
+board_snapshot.json
+
+# Frozen transcript corpora (hundreds of MB, derived from ~/.claude) — local only.
+corpora/
+
+# Throwaway sandbox HOMEs used during ingest / claude-mem runs.
+peers/_wb_ingest_home/
+peers/_clauded_mem_home/
+peers/_cm_home/
+
+# Letta real-run local virtualenv (~891MB) + server state — regenerate, never commit.
+# Recreate: python3.11+ -m venv .letta-venv && .letta-venv/bin/pip install letta
+.letta-venv/
+.letta-state/
+
+# Per-run raw outputs. Aggregate JSON committed via the report; raw stays local.
+results/raw/
+
+__pycache__/
+*.pyc
+
+# card.py lock created when reading the snapshot board
+.board.lock
