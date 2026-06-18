@@ -33,6 +33,10 @@ cd WorkBoard
 
 **Requirements:** Claude Code · Python 3.9+ (standard library only, no `pip install`) · macOS / Linux / Windows. **No account, no cloud, no API key required.** (History Replay's optional bootstrap uses Claude Haiku — the cheapest tier — as a one-time, detached subprocess.)
 
+**On first run**, WorkBoard reads through your recent Claude Code conversation history to work out what you've been working on, then **prompts you to pick which board to build**. By **default it looks back 2 days**. You can ask for a wider window — e.g. *"build a board from the past 7 days"* — to pull N days of history.
+
+> ⚠️ **Going far back isn't recommended.** The further back you reach, the more work it finds — and you can end up **overpopulated with cards**. The default stays conservative at **2 days** for that reason; widen it only when you actually want a bigger backfill.
+
 ---
 
 ## The problem
@@ -90,8 +94,8 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ![A card with subtasks expanded — every step of the work, visible at a glance](docs/assets/actual-card-subtasks.png)
 
-### 4. 🐞 Bug? The card flies back out of Done — full history kept
-**Debugging?** As you (or Claude) is working, it animates back out of Done into In Progress with a 🐞 tag and a new subtask for the fix. The card's history shows the entire ship → bug → fix → ship arc, **so the story is never lost.**
+### 4. `🐞 bug` — The card flies back out of Done, full history kept
+**Debugging?** As you (or Claude) is working, it animates back out of Done into In Progress with a `🐞 bug` tag and a new subtask for the fix. The card's history shows the entire ship → bug → fix → ship arc, **so the story is never lost.**
 
 <img src="docs/assets/bug-to-and-fro.gif" width="480" alt="A card moving from Done back to In Progress with a bug tag, getting fixed, then returning to Done">
 

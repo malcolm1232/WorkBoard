@@ -14,6 +14,26 @@ The deliverable is **`REPORT.md`** (auto-generated); the exhaustive companion is
 **`REPORT_DETAILED.md`**. **New here? Read `CONTEXT.md` first** — full story, file
 map, and resume instructions. Cards #730 / #734 / #735 / #738.
 
+## Which document is which? (doc structure)
+
+| Document | What it is | Read it when… |
+|---|---|---|
+| **`OVERVIEW.md`** | Plain-English walkthrough (focused on mem0) — how mem0 works, how WorkBoard works, method, scoreboard, where WB wins/loses | …you want to **understand** the comparison fast (start here) |
+| **`README.md`** (this) | Folder usage + this doc map + layout + reproduce steps | …you want to **run/navigate** the study |
+| **`REPORT.md`** | The **headline report** — auto-generated: all 4 systems, TL;DR + the studies + key numbers | …you want **“the report”** |
+| **`REPORT_DETAILED.md`** | The **exhaustive report** (a.k.a. "report full") — every table, all peers, sources, limitations | …you want **everything** |
+| **`CONTEXT.md`** | Full **step-by-step of what was done** + what it yields + how to resume without rerunning | …you (or a future session) need the **whole context** without re-running |
+| `run_claude_mem_tiny.md` | Steps to run real claude-mem yourself (optional validation) | …you want to **re-run a peer** |
+| `results/raw/*.json` | Machine-readable outputs every report is rendered from | …you want the **raw numbers** |
+
+**Short version:** `OVERVIEW.md` = friendly explainer · `REPORT.md` = the report ·
+`REPORT_DETAILED.md` = the long/full report · `CONTEXT.md` = how-it-was-built +
+resume notes · `README.md` = folder usage.
+
+> **Scope:** this folder is the **combined live-loop study** — WorkBoard vs **mem0 +
+> claude-mem + Letta**. The dedicated *claude-mem* deep-dive (bootstrap + recall +
+> real run) is the sibling folder `../claude-mem/`.
+
 **Peer measurement, honestly:** mem0 and claude-mem are modeled from each vendor's
 OWN published numbers (can't be accused of sandbagging). **Letta is measured for
 real** — it's the one peer cheap enough to run locally (Ollama backend, no key).

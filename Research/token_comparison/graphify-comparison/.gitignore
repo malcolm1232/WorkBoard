@@ -1,0 +1,8 @@
+# machine-local / heavy — never commit
+sandbox/
+__pycache__/
+*.pyc
+*.board.lock
+# graphify's regenerable AST cache (graph.json + manifest.json kept as evidence)
+fixtures/code_corpus/graphify-out/cache/
+# parent .gitignore also covers: board_snapshot.json, results/raw/
