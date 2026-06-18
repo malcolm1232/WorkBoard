@@ -90,8 +90,8 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ![A card with subtasks expanded — every step of the work, visible at a glance](docs/assets/actual-card-subtasks.png)
 
-### 4. 🐞 Bug? The card flies back out of Done — full history kept
-**Debugging?** As you (or Claude) is working, it animates back out of Done into In Progress with a 🐞 tag and a new subtask for the fix. The card's history shows the entire ship → bug → fix → ship arc, **so the story is never lost.**
+### 4. `🐞 bug` — The card flies back out of Done, full history kept
+**Debugging?** As you (or Claude) is working, it animates back out of Done into In Progress with a `🐞 bug` tag and a new subtask for the fix. The card's history shows the entire ship → bug → fix → ship arc, **so the story is never lost.**
 
 <img src="docs/assets/bug-to-and-fro.gif" width="480" alt="A card moving from Done back to In Progress with a bug tag, getting fixed, then returning to Done">
 
