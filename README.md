@@ -100,11 +100,16 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ## 📊 Token-Efficiency Summary — WorkBoard vs mem0 · claude-mem · Letta · graphify
 
-**WorkBoard remembers your _work_. They remember your conversations.**
+### Why is WorkBoard cheaper?
 
-1. **WorkBoard is a structured knowledge-graph of the _products & features you shipped_** — mem0, claude-mem, and Letta just store memory.
-2. **It deterministically identifies what's in memory** — a precise, structured lookup, not a probabilistic *"full dump."*
-3. **It never spins up a separate session or model call.** claude-mem, mem0 and Letta fire a dedicated extraction/compression call to *remember*; WorkBoard's carding is **inline in your normal turn** and runs **only when there's something to record** — so it never "dumps" your history or burns extra tokens.
+1. **Carding is inline in your normal turn.** mem0, claude-mem and Letta each spin up a **separate model call** to remember (claude-mem compresses *every* session via a dedicated ~5K-token call) — pure overhead on top of your normal usage. WorkBoard adds **zero** extra calls.
+2. **It doesn't run on every turn.** Unlike Letta (memory re-sent every turn) and the per-session extractors, WorkBoard writes **only when there's something to record**.
+3. **No "full dump."** Even when it records, it never re-reads or dumps your history — it writes **only what's needed**, so it never burns extra tokens.
+4. **What it saves is structured, not a blob** — each card carries:
+   - **Title** — a one-line overview, for fast future retrieval
+   - **Origin / why it exists** (+ **Notes**) — the context behind it
+   - **✓ Writeup** — once it's done, *how* it was done (commits, files)
+5. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything.
 
 Measured head-to-head on real history — **same corpus, same tokenizer** (`tiktoken cl100k`); settings *favour the peer*. [**Full receipts**](Research/token_comparison/MASTER_SUMMARY.md).
 
