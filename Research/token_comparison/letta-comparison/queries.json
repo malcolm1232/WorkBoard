@@ -1,0 +1,154 @@
+{
+  "meta": {
+    "version": "2026-06-17.1",
+    "description": "20 recall queries for the WorkBoard vs claude-mem efficiency study. Gold answers are grounded in the actual board state (rev ~1542, 529 cards) and ~/.claude/projects/-Users-malco/ transcripts as of 2026-06-17. All gold answers were written BEFORE either system was queried — see plan section 'Fairness & honesty rules' rule 4.",
+    "shapes": {
+      "pinpoint": "Specific identifier — card num, commit sha, file path, version. Favors structured ledger lookup.",
+      "thematic": "Open-ended topic over a date range. Favors semantic recall.",
+      "lifecycle": "Multi-card story (what shipped + what's still open). Favors structured graph traversal."
+    },
+    "grading": "correct@1 = the answer cites the gold identifier(s) exactly. Numeric token cost = the bytes (tokenized) the system loaded into context to produce the answer. Wrong answers still cost their tokens but don't count toward the headline ratio (cost-per-correct)."
+  },
+  "queries": [
+    {
+      "id": "P01",
+      "shape": "pinpoint",
+      "q": "Which commit fixed the #627 silent-drop bootstrap bug?",
+      "gold_ids": ["#627", "db9eedd", "ef483e2"],
+      "gold_answer": "#627 (silent-drop bootstrap bug) was fixed in the 260616 sequence: #646 split (db9eedd) → #645 backfill (ef483e2) → #641 TOCTOU (e3b668f) → #643 direct-CAS (ce03382) → #644 tests (f93dc43). Initial fix landed via #639/#640/#642."
+    },
+    {
+      "id": "P02",
+      "shape": "pinpoint",
+      "q": "What card number tracks the per-session pulse + CAS lost-update fix, and what commit shipped it?",
+      "gold_ids": ["#608", "#609", "#624", "f6b232a"],
+      "gold_answer": "Cards #608 (per-session pulse) and #609 (CAS lost-update fix), tracked by parent card #624. Shipped as fast-forward merge f6b232a to main on 2026-06-10; deployed via launchctl kickstart com.boardsteward.7891."
+    },
+    {
+      "id": "P03",
+      "shape": "pinpoint",
+      "q": "What is the file path of the bootstrap hourly extractor?",
+      "gold_ids": ["scripts/hourly_extractor.py"],
+      "gold_answer": "scripts/hourly_extractor.py — invoked by bootstrap_project.sh → serve.py --bootstrap → serve_bootstrap.py → _stream_hourly_cards()."
+    },
+    {
+      "id": "P04",
+      "shape": "pinpoint",
+      "q": "Which plugin version shipped the de-dilution + #74 batch-detector + #75 card-before-edit warn hook?",
+      "gold_ids": ["0.9.8", "#74", "#75"],
+      "gold_answer": "Plugin version 0.9.8 (live-carding fix). Combined card #73 (SKILL.md de-dilution), #74 (batch-detector), #75 (card-before-edit warn hook). Commit 7317709."
+    },
+    {
+      "id": "P05",
+      "shape": "pinpoint",
+      "q": "What card number is the 'review-coverage' feature?",
+      "gold_ids": ["#598"],
+      "gold_answer": "#598 — stamp reviewed card; trigger on review skills only; bootstrap backfill."
+    },
+    {
+      "id": "P06",
+      "shape": "pinpoint",
+      "q": "What backup directory holds the live board snapshot taken before the 260616 evening clean-slate?",
+      "gold_ids": ["wb-backup-260616-162935"],
+      "gold_answer": "~/Desktop/wb-backup-260616-162935/ — rev 889, 466 cards, the canonical restore point after that clean-slate."
+    },
+    {
+      "id": "P07",
+      "shape": "pinpoint",
+      "q": "What card numbers were placed in the Accepted Tradeoffs column for multi-board concurrency, and in what commit?",
+      "gold_ids": ["#634", "#635", "#636", "#637", "0406d2b"],
+      "gold_answer": "Cards #634, #635, #636, #637 — four intentional concurrency tradeoffs from #633 (recon activity-merge, get_active global fallback, prune 32-cap, file-lock timeout). Commit 0406d2b."
+    },
+    {
+      "id": "T01",
+      "shape": "thematic",
+      "q": "What changed around the bootstrap / history-replay path during May 2026?",
+      "gold_ids": ["#570", "#627", "#640", "#645", "hourly_extractor"],
+      "gold_answer": "Bootstrap-transpose (#570) shipped during late-May/early-June work; the tier-2 hourly extractor was the core path. A latent bug allowed bootstrap to drop cards #582-625 silently when a bucket's extraction partially failed, surfaced and tracked as #627 (fixed 260616). The mining is driven by hourly_extractor.py via _stream_hourly_cards, harvesting from 5 sources via discover2.py."
+    },
+    {
+      "id": "T02",
+      "shape": "thematic",
+      "q": "What's the story of live-carding enforcement — discipline vs hook — from late May into June?",
+      "gold_ids": ["#73", "#74", "#75", "0.9.8", "de-dilution"],
+      "gold_answer": "Initial discipline-only approach failed (commits without cards). 6/4-6/5: shipped SKILL.md de-dilution (#73) + batch-detector (#74) + card-before-edit warn hook (#75) in v0.9.8 — chose discipline over enforcement. The three laws and 5-shape table are in SKILL.md. Carding LAWs further hardened with #103 decompose guard + #107 phase model + #384 recon-gate."
+    },
+    {
+      "id": "T03",
+      "shape": "thematic",
+      "q": "What perf/UX work happened on board.html drag and pulse animations?",
+      "gold_ids": ["#503", "#502", "#494", "#535"],
+      "gold_answer": "Root cause #503: .finish() on infinite pulse threw, aborting dragover reflow → 'can't drag while pulsing' (#502). Shipped: box-shadow-only glow, sticky active-work, undo-synced, #494 defer-render, #535 column glide. See project_pulse_drag_finish_rootcause memory."
+    },
+    {
+      "id": "T04",
+      "shape": "thematic",
+      "q": "What did the multi-board / reconciliation work cover when v2 shipped?",
+      "gold_ids": ["0.9.6", "#633", "recon"],
+      "gold_answer": "Plugin v0.9.6 shipped board-steward v2: multi-board routing/isolation + reconciliation (gating + Haiku moves). The /e2e harness was built alongside to verify routing isolation and recon end-to-end without polluting the live board."
+    },
+    {
+      "id": "T05",
+      "shape": "thematic",
+      "q": "What's the comparison framing between WorkBoard and claude-mem / memory stores?",
+      "gold_ids": ["#673", "#563", "claude-mem"],
+      "gold_answer": "WorkBoard frames itself as a knowledge graph of work outcomes (origin, subtasks, writeup, history, links) walkable in a handful of tokens, vs. claude-mem/mem0/letta which are vector memory stores. WorkBoard is the lightest per-prompt of 5 peers measured in TOKEN_BUDGET.md (~309 per turn, ~222 SessionStart). Honest tradeoffs in COMPARISON.md: claude-mem wins on semantic recall of vague conversational context, cross-project memory, and zero-structure-required."
+    },
+    {
+      "id": "T06",
+      "shape": "thematic",
+      "q": "What changed around the SessionStart digest in early June?",
+      "gold_ids": ["#576", "measure_digest", "digest"],
+      "gold_answer": "The SessionStart digest was tuned for token economy via scripts/measure_digest.py (deterministic A/B compaction). Backlog-calm (#576) compressed columns from 21→6 entries. Cold SessionStart sits near 222 tokens, with full board.json (130KB+) never auto-loaded."
+    },
+    {
+      "id": "T07",
+      "shape": "thematic",
+      "q": "What were the major UI-iteration tradeoffs the user settled on for board.html?",
+      "gold_ids": ["box-shadow", "boho", "#503"],
+      "gold_answer": "Iterate locally (no auto-commit/push per UI tweak — board serves templates/board.html LIVE at :7891). Pulse/glow shipped as box-shadow-only (perf). Boho colors + column layout + unify-urgent (retire mandatory→super-urgent) landed late 5/early 6 (#260605 carry-forward)."
+    },
+    {
+      "id": "L01",
+      "shape": "lifecycle",
+      "q": "What shipped and what's still open from the recon hardening sequence after #627 was fixed?",
+      "gold_ids": ["#627", "#639", "#640", "#642", "#646", "#645", "#641", "#643", "#644"],
+      "gold_answer": "Sequence: #639/#640/#642 closed #627 initially. Then s2 (260616b) completed: #646 split (db9eedd) → #645 backfill (ef483e2) → #641 TOCTOU (e3b668f) → #643 direct-CAS (ce03382) → #644 tests (f93dc43). Per carry-forward 260616: 'Nothing left' from the sequence; VISION count 34→37; board rev 841."
+    },
+    {
+      "id": "L02",
+      "shape": "lifecycle",
+      "q": "What is the state of the per-session pulse work — what shipped, what's still open?",
+      "gold_ids": ["#608", "#609", "#624", "#610", "#611"],
+      "gold_answer": "Shipped (verified 260610): #608 per-session pulse + #609 CAS lost-update fix, merged f6b232a, deployed via launchctl. Verified 6/6 dev tests, 12-parallel adds none lost, stale→409. Parent #624. NOT pushed to origin at time (main +2 ahead). OPEN: #610 undo-warning, #611 port-registry, manual N-session pulse browser check."
+    },
+    {
+      "id": "L03",
+      "shape": "lifecycle",
+      "q": "What are the four 'accepted concurrency tradeoffs' on the board and why aren't they bugs?",
+      "gold_ids": ["#634", "#635", "#636", "#637"],
+      "gold_answer": "Cards #634-#637 live in the ⚖ Accepted Tradeoffs column (intentional, not bugs). They are: recon activity-merge, get_active global fallback, prune 32-cap, file-lock timeout. Each has a written revisit-trigger. Origin: #633 audit; commit 0406d2b. Don't 'fix' them — re-evaluate only when their trigger condition fires."
+    },
+    {
+      "id": "L04",
+      "shape": "lifecycle",
+      "q": "What were the open items at end-of-day 2026-06-09 and which of them have since shipped?",
+      "gold_ids": ["#570", "#576", "#572", "#573", "#577"],
+      "gold_answer": "Per carry-forward 260609: shipped #562 carding-law, #570 bootstrap-transpose, #574/#575 lifecycle, #576 backlog-calm, #577 cmd_fly, #572 install-doctor, #573 priority docs. #564 glow REVERTED. OPEN at EOD: no-churn reinstall (0.9.16 installed < 0.9.19 dev), #564, #566, delete demo #582. By 260616 the bootstrap silent-drop (related to #582) was fixed."
+    },
+    {
+      "id": "L05",
+      "shape": "lifecycle",
+      "q": "Trace the carding-law hardening — origin, what guards shipped, and which test failed.",
+      "gold_ids": ["#103", "#107", "#384"],
+      "gold_answer": "Per carry-forward 260606b: shipped #103 decompose guard + #107 phase model + #384 recon-gate. Fresh-install test was the harness (subagents can't test the law). Tests #2/#4 failed and were fixed in the same sequence; test #3 was skipped. Byproducts reverted; board restored to 338 cards. OPEN at EOD: re-test after reinstall."
+    },
+    {
+      "id": "L06",
+      "shape": "lifecycle",
+      "q": "What is the install/restore protocol after a /clean-slate and which backup is canonical for the 260616 state?",
+      "gold_ids": ["#626", "#668", "clean-slate"],
+      "gold_answer": "After /clean-slate the auto-bootstrap re-mines a LOSSY renumbered board. Canonical restore: highest-rev backup (260616 = wb-backup-260616-162935, rev 889, 466 cards). Duplicate-tab churn was fixed in 0.9.22. See memory feedback_restore_canonical_board_after_cleanslate."
+    }
+  ]
+}

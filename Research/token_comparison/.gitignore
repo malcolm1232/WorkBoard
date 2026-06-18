@@ -1,0 +1,10 @@
+# PRIVATE — never commit/push: real board + real transcripts may contain secrets.
+*/board_snapshot.json
+*/corpora/
+# Regenerable + machine-local
+*/results/raw/
+*/peers/_*_home/
+*/lib/product_scripts_ro/
+**/__pycache__/
+*.pyc
+*.board.lock

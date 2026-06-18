@@ -1,0 +1,7 @@
+# Local/private/heavy — re-derive with the drivers; never commit.
+board_snapshot.json
+corpora/
+peers/_wb_ingest_home/
+__pycache__/
+*.pyc
+.board.lock
