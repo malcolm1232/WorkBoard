@@ -128,10 +128,11 @@ Every memory tool markets a big efficiency number. We reproduced their setups on
 - **claude-mem compresses on your full subscription tier — every session.** Not a cheap or detached tier: it spends full-price model compute each session just to remember.
 - **graphify ships no hook, despite its docs describing one.** Its docs describe a `PreToolUse` hook that fires on every file read; the real install (`graphifyy 0.8.41`) writes **no `settings.json` and no hook entry**. *(In graphify's favour that means 0 per-prompt cost — but the advertised integration isn't what installs.)*
 
-<details>
-<summary><b>Head-to-head, by competitor</b> — click to expand (same tokenizer; settings favour the peer)</summary>
+### Head-to-head, by competitor
 
-**WorkBoard vs mem0**
+*Measured head-to-head — same tokenizer (`tiktoken cl100k`); settings favour the peer.*
+
+#### WorkBoard vs mem0
 
 | Axis | WorkBoard | mem0 | Winner |
 |---|--:|--:|:--|
@@ -141,7 +142,7 @@ Every memory tool markets a big efficiency number. We reproduced their setups on
 | Per single recall | 2,399 | 1,800 | mem0 *(leaner)* |
 | Recall vs full-context *(26K)* | 90.8% fewer | 93.1% fewer | ~tie |
 
-**WorkBoard vs claude-mem**
+#### WorkBoard vs claude-mem
 
 | Axis | WorkBoard | claude-mem | Winner |
 |---|--:|--:|:--|
@@ -151,7 +152,7 @@ Every memory tool markets a big efficiency number. We reproduced their setups on
 | Per single recall | 2,399 | 3,237 | 🟢 **WorkBoard −25.9%** |
 | Backfill past history | mines your history | forward-only *(no bulk command)* | 🟢 **WorkBoard** |
 
-**WorkBoard vs Letta (MemGPT)**
+#### WorkBoard vs Letta (MemGPT)
 
 | Axis | WorkBoard | Letta | Winner |
 |---|--:|--:|:--|
@@ -160,7 +161,7 @@ Every memory tool markets a big efficiency number. We reproduced their setups on
 | Live loop *(100 × 50 × 3)* | 2,259,400 *(929,400 trimmed)* | 11,909,200 | 🟢 **WorkBoard −81.0%** |
 | Per single recall | 2,399 | 1,064 | Letta *(leaner)* |
 
-**WorkBoard vs graphify** *(code knowledge-graph — different domain)*
+#### WorkBoard vs graphify *(code knowledge-graph — different domain)*
 
 | Axis | WorkBoard | graphify | Winner |
 |---|--:|--:|:--|
@@ -169,8 +170,6 @@ Every memory tool markets a big efficiency number. We reproduced their setups on
 | Per recall | 2,399 *(work Qs)* | 1,374 *(code Qs)* | different questions |
 | Write / keep current | 0 | 0 | tie |
 | Big artifact autoload | never | never | tie |
-
-</details>
 
 ---
 
