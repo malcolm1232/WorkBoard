@@ -33,10 +33,6 @@ cd WorkBoard
 
 **Requirements:** Claude Code · Python 3.9+ (standard library only, no `pip install`) · macOS / Linux / Windows. **No account, no cloud, no API key required.** (History Replay's optional bootstrap uses Claude Haiku — the cheapest tier — as a one-time, detached subprocess.)
 
-**On first run**, WorkBoard reads through your recent Claude Code conversation history to work out what you've been working on, then **prompts you to pick which board to build**. By **default it looks back 2 days**. You can ask for a wider window — e.g. *"build a board from the past 7 days"* — to pull N days of history.
-
-> ⚠️ **Going far back isn't recommended.** The further back you reach, the more work it finds — and you can end up **overpopulated with cards**. The default stays conservative at **2 days** for that reason; widen it only when you actually want a bigger backfill.
-
 ---
 
 ## The problem
@@ -101,6 +97,28 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ---
 
+## 🤔 How is this different from claude-mem / mem0 / letta?
+
+**They remember your conversations. WorkBoard remembers your _work_.**
+
+> **mem0, claude-mem, and Letta store memory. WorkBoard is a structured knowledge-graph of what you shipped.**
+
+Those tools embed past chat into a vector store and recall fuzzy chunks by similarity. WorkBoard records the **outcomes** as a graph you can walk. Measured head-to-head on real history — same corpus, same tokenizer ([**full receipts**](Research/token_comparison/MASTER_SUMMARY.md)):
+
+| What you're doing | WorkBoard | Memory tools (mem0 · claude-mem · Letta) | Winner |
+|---|---|---|:--|
+| **Build** the memory | deterministic hourly digests, few calls | an LLM reads & compresses **every session** | 🟢 **WorkBoard — ~98–99% fewer tokens** |
+| **Persist** as you work | inline carding, **0 model calls** | an LLM call **every session** (Letta: every *turn*) | 🟢 **WorkBoard — free** |
+| **Run** the whole loop *(per project)* | structured + free writes | per-session / per-turn LLM tax | 🟢 **WorkBoard — 34–81% fewer tokens** |
+| **Recall** a single fact | a structured card (title · origin · writeup · links) | a fuzzy vector chunk | mem0 / Letta leaner; WorkBoard beats claude-mem **25.9%** |
+| **Read it yourself** | a live kanban — what shipped, why, what's open | opaque embeddings | 🟢 **WorkBoard** |
+
+The 130 KB+ `board.json` is **never auto-loaded** — context stays clean no matter how big the board grows.
+
+**Honest:** for vague, cross-project *"what did I once say about X?"* recall, a vector memory wins — and nothing stops you running both. Where each wins, and when to pick which: **[`docs/COMPARISON.md`](docs/COMPARISON.md)** and the full study in **[`Research/token_comparison/`](Research/token_comparison/MASTER_SUMMARY.md)**.
+
+---
+
 ## Under the hood
 
 ### 🔒 Hook-enforced — the board literally can't drift
@@ -137,26 +155,11 @@ The net effect: **the user never has to ask "did you update the board?"** — an
 
 ---
 
-## 🤔 How is this different from claude-mem / mem0 / letta?
+## Optional Installation
 
-Different shape, not just a different angle.
+**On first run**, WorkBoard reads through your recent Claude Code conversation history to work out what you've been working on, then **prompts you to pick which board to build**. By **default it looks back 2 days**. You can ask for a wider window — e.g. *"build a board from the past 7 days"* — to pull N days of history.
 
-> **claude-mem stores memory. WorkBoard is a knowledge graph of work.**
-
-Memory stores embed your past conversation and recall chunks by similarity — *probabilistic*, *unstructured*, queried when you happen to remember to. WorkBoard records the *outcomes*: every card has `title` (what) · `origin` (why) · `subtasks` (how) · `writeup` (what shipped + commits + files) · `history` (the lifecycle) · `links` (to related cards). When future-Claude asks *"why did we touch auth in May?"*, it doesn't search vectors — it **walks the graph**:
-
-```
-list Done from May matching "auth"
-  → #214 "Rewrite auth middleware"
-     ↓ origin:   "Legal flagged session-token storage"
-     ↓ subtasks: 4 concrete steps
-     ↓ writeup:  commit 8a748b8 + files + verification
-     ↓ links:    #213 legal review, #221 follow-up bug
-```
-
-That traversal costs a handful of tokens. A vector store doing the same work pulls in conversation chunks the model has to re-read. WorkBoard is also the **lightest per-prompt** of the five peers measured ([`docs/TOKEN_BUDGET.md`](docs/TOKEN_BUDGET.md)) — the 130 KB+ `board.json` is *never* auto-loaded into context.
-
-But **they're complements, not competitors**: claude-mem is your memory; WorkBoard is your project ledger. Use claude-mem when you vaguely remember discussing something. Use WorkBoard when you want *"what shipped, what's open, what's the story behind it."* Honest tradeoffs (where claude-mem wins, where WorkBoard wins, when to pick which) live in **[`docs/COMPARISON.md`](docs/COMPARISON.md)**.
+> ⚠️ **Going far back isn't recommended.** The further back you reach, the more work it finds — and you can end up **overpopulated with cards**. The default stays conservative at **2 days** for that reason; widen it only when you actually want a bigger backfill.
 
 ---
 
