@@ -126,38 +126,38 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 | Axis | WorkBoard (WB) | mem0 | Winner |
 |---|--:|--:|:--|
-| Build the memory | 64,162 tok | 5,095,769 tok | 🟢 **WB 98.7% cheaper** |
-| Persist / session | **0 model calls** | 1 LLM extract call (~5,462 tok) + embed | 🟢 **WB (free)** |
-| Live loop *(100 sessions × 3)* | 719,700 tok | 1,086,200 tok | 🟢 **WB 33.7% cheaper** |
-| Per single recall | 2,399 tok | 1,800 tok | mem0 *(leaner)* |
+| Build the memory | 64,162 Tok | 5,095,769 Tok | 🟢 **WB 98.7% cheaper** |
+| Persist / session | **0 model calls** | 1 LLM extract call (~5,462 Tok) + embed | 🟢 **WB (free)** |
+| Live loop *(100 sessions × 3)* | 719,700 Tok | 1,086,200 Tok | 🟢 **WB 33.7% cheaper** |
+| Per single recall | 2,399 Tok | 1,800 Tok | mem0 *(leaner)* |
 | Recall vs full-context *(26K)* | 90.8% fewer | 93.1% fewer | ~tie |
 
 ### WorkBoard vs claude-mem
 
 | Axis | WorkBoard (WB) | claude-mem | Winner |
 |---|--:|--:|:--|
-| Build the memory | ~10,546 tok | 5,095,769 tok | 🟢 **WB ~99% cheaper** |
+| Build the memory | ~10,546 Tok | 5,095,769 Tok | 🟢 **WB ~99% cheaper** |
 | Persist / session | **0 model calls** | 1 compression call *(full tier)* | 🟢 **WB (free)** |
-| Live loop *(100 sessions × 3)* | 719,700 tok | 1,517,300 tok | 🟢 **WB 52.6% cheaper** |
-| Per single recall | 2,399 tok | 3,237 tok | 🟢 **WB 25.9% cheaper** |
+| Live loop *(100 sessions × 3)* | 719,700 Tok | 1,517,300 Tok | 🟢 **WB 52.6% cheaper** |
+| Per single recall | 2,399 Tok | 3,237 Tok | 🟢 **WB 25.9% cheaper** |
 | Backfill past history | mines your history | forward-only *(no bulk command)* | 🟢 **WB** |
 
 ### WorkBoard vs Letta (MemGPT)
 
 | Axis | WorkBoard (WB) | Letta | Winner |
 |---|--:|--:|:--|
-| In-context memory / turn | 306 tok *(0 carried)* | 3,444 tok *(blocks + tool schemas + prompt)* | 🟢 **WB** |
+| In-context memory / turn | 306 Tok *(0 carried)* | 3,444 Tok *(blocks + tool schemas + prompt)* | 🟢 **WB** |
 | Persist / session | **0 model calls** | LLM tool-call per write + compaction | 🟢 **WB** |
-| Live loop *(100 × 50 × 3)* | 2,259,400 tok *(929,400 trimmed)* | 11,909,200 tok | 🟢 **WB 81.0% cheaper** |
-| Per single recall | 2,399 tok | 1,064 tok | Letta *(leaner)* |
+| Live loop *(100 × 50 × 3)* | 2,259,400 Tok *(929,400 trimmed)* | 11,909,200 Tok | 🟢 **WB 81.0% cheaper** |
+| Per single recall | 2,399 Tok | 1,064 Tok | Letta *(leaner)* |
 
 ### WorkBoard vs graphify *(code knowledge-graph — different domain)*
 
 | Axis | WorkBoard (WB) | graphify | Winner |
 |---|--:|--:|:--|
-| Always-on / prompt | 306 tok | 61 tok *(cached)* | graphify |
-| SKILL.md on engage | 5,898 tok | 8,245 tok *(+9,704 refs)* | 🟢 **WB 28.5% cheaper** |
-| Per recall | 2,399 tok *(work Qs)* | 1,374 tok *(code Qs)* | different questions |
+| Always-on / prompt | 306 Tok | 61 Tok *(cached)* | graphify |
+| SKILL.md on engage | 5,898 Tok | 8,245 Tok *(+9,704 refs)* | 🟢 **WB 28.5% cheaper** |
+| Per recall | 2,399 Tok *(work Qs)* | 1,374 Tok *(code Qs)* | different questions |
 | Write / keep current | 0 | 0 | tie |
 | Big artifact autoload | never | never | tie |
 
