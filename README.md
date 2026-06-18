@@ -102,7 +102,7 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ### Why is WorkBoard cheaper?
 
-1. **Carding is inline in your normal turn.** mem0, claude-mem and Letta each spin up a **separate model call** to remember (claude-mem compresses *every* session via a dedicated ~5K-token call) — pure overhead on top of your normal usage. WorkBoard adds **zero** extra calls.
+1. **Carding is inline — zero extra model calls.** WorkBoard writes the card *during* your normal turn: the agent runs a deterministic `card.py` command and the writeup is text it already produced — **no separate session, no extra inference pass.** mem0, claude-mem and Letta instead spin up a **dedicated model call** to remember (claude-mem compresses *every* session via a ~5K-token call) — pure overhead on top of your normal usage.
 2. **It doesn't run on every turn.** Unlike Letta (memory re-sent every turn) and the per-session extractors, WorkBoard writes **only when there's something to record**.
 3. **No "full dump."** Even when it records, it never re-reads or dumps your history — it writes **only what's needed**, so it never burns extra tokens.
 4. **What it saves is structured, not a blob** — each card carries:
