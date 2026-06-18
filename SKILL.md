@@ -241,6 +241,11 @@ root (walks up to find `board/board.json`) or pass `--board <path>`.
 `board.json` to count columns is the anti-pattern this kills. **Full recipe sheet + the read ladder →
 `docs/PLAYBOOK.md`.** Never write `index.json` by hand.
 
+**Open a NEW board for another project** (user says *"new workboard / create a board for X"*) → one command:
+`card.py board-new <Name>` — creates + serves an **empty** board on its own auto-assigned port (no chat
+mining). Add `--dir <parent>` (default `~/Desktop`) or `--port N`. Then card into it with
+`card.py --board <printed path> add …`. (For a board pre-*filled* from past history, see `docs/BOOTSTRAP.md`.)
+
 **Three text fields:** `origin` (the WHY, at creation, user's words) · `notes` (mutable, in-flight
 state) · `writeup` (at Done, how-it-shipped from real SHAs). A Done card with empty `writeup` is a bug.
 **Tags:** taxonomy-driven, capped, prefer an existing entry — read `board.json → tagTaxonomy` first.

@@ -373,6 +373,17 @@ def build_parser():
     ppl.add_argument("--count", action="store_true", help="emit just the open count (for shell scripts)")
     ppl.set_defaults(fn=cmd_prelaunch_check)
 
+    # board-new (#775) — create + serve a brand-new EMPTY board for a project.
+    # The easy "open a new workboard" front door: no chat-mining, own port.
+    pbn = sub.add_parser("board-new",
+                         help="create + serve a NEW empty board for a project: "
+                              "`card.py board-new <Name> [--dir DIR] [--port N]`. "
+                              "Auto-assigns a port; no history mining.")
+    pbn.add_argument("name", help="board name (also the project folder created under --dir)")
+    pbn.add_argument("--dir", default=None, help="parent dir for the project (default: ~/Desktop)")
+    pbn.add_argument("--port", type=int, default=None, help="preferred port (default: auto-assign)")
+    pbn.set_defaults(fn=cmd_board_new)
+
     return ap
 
 
@@ -453,9 +464,64 @@ def _hoist_board(argv):
     return board, out
 
 
+def cmd_board_new(args):
+    """Create + serve a brand-new EMPTY board for a project — the easy
+    'open a new workboard' front door. Thin wrapper around
+    `serve.py --project <dir> --bootstrap --no-discover --title <Name>`:
+    bootstraps board/board.json from the template, auto-assigns a port, serves
+    it (SSE), and DOES NOT mine chat history. Idempotent: re-running on an
+    existing board just reports its URL. (#775)"""
+    import subprocess
+    name = args.name.strip()
+    base = Path(args.dir).expanduser().resolve() if args.dir else (Path.home() / "Desktop")
+    proj = base / name
+    board_dir = (proj / "board").resolve()
+    serve_py = Path(__file__).resolve().parent / "serve.py"
+
+    def _port_for(bd):
+        try:
+            import port_registry as pr
+            return pr.lookup(str(bd)) or pr.assignments().get(str(bd))
+        except Exception:
+            return None
+
+    if (board_dir / "board.json").exists():
+        p = _port_for(board_dir)
+        loc = f" → http://127.0.0.1:{p}" if p else ""
+        print(f"board '{name}' already exists at {board_dir}{loc}")
+        print(f"   add cards:  card.py --board {board_dir}/board.json add --title \"...\"")
+        return
+
+    proj.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, str(serve_py), "--project", str(proj),
+           "--bootstrap", "--no-discover", "--title", name]
+    if args.port:
+        cmd += ["--port", str(args.port)]
+    logf = open(f"/tmp/board-new-{name}.log", "ab")
+    subprocess.Popen(cmd, stdout=logf, stderr=logf, start_new_session=True)
+
+    port = None
+    for _ in range(25):  # ~7.5s for the server to bootstrap + register its port
+        time.sleep(0.3)
+        if (board_dir / "board.json").exists():
+            port = _port_for(board_dir)
+            if port:
+                break
+    if port:
+        print(f"✅ new board '{name}' → http://127.0.0.1:{port}")
+        print(f"   board file: {board_dir}/board.json")
+        print(f"   add cards:  card.py --board {board_dir}/board.json add --title \"...\"")
+    else:
+        print(f"board '{name}' is bootstrapping at {board_dir}; the port should "
+              f"register shortly (see /tmp/board-new-{name}.log).")
+
+
 def main():
     hoisted, argv = _hoist_board(sys.argv[1:])
     args = build_parser().parse_args(argv)
+    # board-new creates a NEW board — there's no existing board to find/load/lock.
+    if getattr(args, "cmd", None) == "board-new":
+        return cmd_board_new(args)
     if hoisted and not args.board:
         args.board = Path(hoisted)
     board = find_board(args.board)
