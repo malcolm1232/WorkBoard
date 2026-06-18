@@ -107,7 +107,16 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 Measured head-to-head on real history — **same corpus, same tokenizer** (`tiktoken cl100k`); settings *favour the peer*. [**Full receipts**](Research/token_comparison/MASTER_SUMMARY.md).
 
-#### WorkBoard vs mem0
+**How it works:** WorkBoard's figures are *measured* (its real `card.py` recall + real bootstrap, run against a frozen snapshot of real Claude-Code history); each peer comes from its own published numbers or a real sandboxed run. **What the rows mean:**
+
+- **Build the memory** — the one-time cost to turn your *past* history into memory.
+- **Persist / session** — the ongoing cost to *save* each new session's work.
+- **Live loop *(100 sessions × 3 recalls)*** — persist **+** recall combined over a project's life; the real steady-state cost.
+- **Per single recall** — tokens to answer *one* question.
+- **Recall vs full-context *(26K)*** — savings vs pasting your whole ~26,000-token history into every prompt (the naive baseline mem0's *"90%"* is measured against).
+- *(Letta)* **In-context memory / turn** — memory re-sent on **every** turn · *(graphify)* **Always-on / prompt** + **SKILL.md on engage** — per-prompt and on-engagement load.
+
+### WorkBoard vs mem0
 
 | Axis | WorkBoard (WB) | mem0 | Winner |
 |---|--:|--:|:--|
@@ -117,7 +126,7 @@ Measured head-to-head on real history — **same corpus, same tokenizer** (`tikt
 | Per single recall | 2,399 tok | 1,800 tok | mem0 *(leaner)* |
 | Recall vs full-context *(26K)* | 90.8% fewer | 93.1% fewer | ~tie |
 
-#### WorkBoard vs claude-mem
+### WorkBoard vs claude-mem
 
 | Axis | WorkBoard (WB) | claude-mem | Winner |
 |---|--:|--:|:--|
@@ -127,7 +136,7 @@ Measured head-to-head on real history — **same corpus, same tokenizer** (`tikt
 | Per single recall | 2,399 tok | 3,237 tok | 🟢 **WB 25.9% cheaper** |
 | Backfill past history | mines your history | forward-only *(no bulk command)* | 🟢 **WB** |
 
-#### WorkBoard vs Letta (MemGPT)
+### WorkBoard vs Letta (MemGPT)
 
 | Axis | WorkBoard (WB) | Letta | Winner |
 |---|--:|--:|:--|
@@ -136,7 +145,7 @@ Measured head-to-head on real history — **same corpus, same tokenizer** (`tikt
 | Live loop *(100 × 50 × 3)* | 2,259,400 tok *(929,400 trimmed)* | 11,909,200 tok | 🟢 **WB 81.0% cheaper** |
 | Per single recall | 2,399 tok | 1,064 tok | Letta *(leaner)* |
 
-#### WorkBoard vs graphify *(code knowledge-graph — different domain)*
+### WorkBoard vs graphify *(code knowledge-graph — different domain)*
 
 | Axis | WorkBoard (WB) | graphify | Winner |
 |---|--:|--:|:--|
