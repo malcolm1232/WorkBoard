@@ -100,6 +100,8 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 ## 📊 Token-Efficiency Summary — WorkBoard vs mem0 · claude-mem · Letta · graphify
 
+> **The only skill you need to know: `/check`.** You don't have to learn any commands — WorkBoard's agent *inherently* reaches for `/check` to traverse your card tree whenever you ask it to draw on past work. In our agent tests it recalled this way **100% of the time** (12/12 spawned agents, no prompting). And if you ever want to force it, `/check` is the **only** skill in WorkBoard you need — it walks the tree straight from your words, e.g. *"/check what I decided last time about the auth redirect"* — at **~26× cheaper** than a normal Claude recall.
+
 ### Why is WorkBoard cheaper?
 
 1. **Carding is inline — zero extra model calls.** WorkBoard writes the card *during* your normal turn: the agent runs a deterministic `card.py` command and the writeup is text it already produced — **no separate session, no extra inference pass.** mem0, claude-mem and Letta instead spin up a **dedicated model call** to remember (claude-mem compresses *every* session via a ~5K-token call) — pure overhead on top of your normal usage.
@@ -109,7 +111,8 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
    - **Title** — a one-line overview, for fast future retrieval
    - **Origin / why it exists** (+ **Notes**) — the context behind it
    - **✓ Writeup** — once it's done, *how* it was done (commits, files)
-5. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything. Natural-language recall is one command: **`card.py recall "the auth-redirect bug from last week"`** surfaces the top matching card #s (a deterministic, zero-dependency BM25F search — no vector DB, no API), then `card.py show <#>` for detail or `--traverse` to walk linked cards. Humans can also just type **`/check <words>`** (the recall skill) to search the board directly.
+5. **Retrieval is ~26× cheaper per correct answer — at ~0 inference tokens.** Finding a card runs a **local BM25 search**, so it spends **0 model-call tokens, no vector DB, no API** — the only cost is the handful of result titles surfaced into context (**~268 tokens per correct recall**). The vector memory systems (mem0, claude-mem, Letta) instead spend **~6,956 tokens per retrieval** *plus* an embedding API and a vector store. And the accuracy holds up against global IR benchmarks — [see **🎯 Retrieval accuracy — does it surface the *right* card?**](https://github.com/malcolm1232/WorkBoard#-retrieval-accuracy--does-it-surface-the-right-card).
+6. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything.
 
 *[**Read the full study here →**](Research/token_comparison/MASTER_SUMMARY.md)*
 

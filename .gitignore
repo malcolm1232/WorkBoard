@@ -54,3 +54,6 @@ README.preview.html
 Research/global-benchmarks/inputs/
 Research/global-benchmarks/results/dense_cache*.json
 Research/retrieval-bakeoff/results/dense_cache.json
+
+# local board snapshots (manual saves) — never ship
+kept-boards/
