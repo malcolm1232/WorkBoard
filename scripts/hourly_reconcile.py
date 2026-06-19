@@ -542,7 +542,7 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
                 try:
                     subprocess.run(
                         [sys.executable, str(card_py), "--board", str(board),
-                         "fly", str(num), "inprogress", "--pause-ms", "150",
+                         "fly", str(num), "inprogress", "--pause-ms", str(_RECONCILE_PACE_MS),
                          "--via", "harvest", "--force"],
                         capture_output=True, text=True, timeout=8)
                     time.sleep(0.35)
@@ -551,7 +551,7 @@ def reconcile_sweep(card_py: Path, board: Path, events: list[dict],
             # #506 — these moves are the automated background harvester, not a
             # hands-on move; tag them so the Logs HUD shows (Auto-harvest) MOVE.
             args = [sys.executable, str(card_py), "--board", str(board),
-                    "fly", str(num), target, "--pause-ms", "150", "--via", "harvest"]
+                    "fly", str(num), target, "--pause-ms", str(_RECONCILE_PACE_MS), "--via", "harvest"]
             if target == "done":
                 args += ["--writeup", f"Recon: {reason}"]
             else:
@@ -601,6 +601,13 @@ _KEEP_TAGS = frozenset({"bug", "feature", "refactor", "enhancement"})
 # the sweep can move 100+ cards, so a slow pace makes the board crawl. This is a
 # feature-specific pace, NOT the simulation glide knob the no-override rule guards.
 _DECLUTTER_PACE_MS = 45
+
+# Per-card glide pace for LLM reconcile moves (ms). Matches the bootstrap
+# 'speedup' tier (base 300ms ÷ 5) so a recon pass blasts through stale cards
+# instead of crawling; the task→IP→done hop stays visible via the 0.35s IP dwell
+# below. Feature-specific pace, NOT the simulation glide knob the no-override
+# rule guards.
+_RECONCILE_PACE_MS = 60
 
 
 def declutter_sweep(card_py: Path, board: Path, today: str | None = None) -> int:

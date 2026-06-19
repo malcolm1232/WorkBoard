@@ -2,11 +2,11 @@
 
 # 🗂️ WorkBoard
 
-### A live knowledge graph of your work.
+### Live Workboard for Users and Agents
 
-**Never lose an idea. Never lose a workflow. Visualise your memory.**
+**Watch your work come to life — never lose an idea, never lose a workflow.**
 
-![Version](https://img.shields.io/badge/version-0.9.30-blue) ![License](https://img.shields.io/badge/license-Apache--2.0-green) ![For Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2) ![Runs locally](https://img.shields.io/badge/runs-100%25%20local-success) ![No account](https://img.shields.io/badge/account-none-lightgrey)
+![Version](https://img.shields.io/badge/version-0.9.35-blue) ![License](https://img.shields.io/badge/license-Apache--2.0-green) ![For Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2) ![Runs locally](https://img.shields.io/badge/runs-100%25%20local-success) ![No account](https://img.shields.io/badge/account-none-lightgrey)
 
 ![Watch a fresh board fill itself — History Replay flying past work onto the board on install](docs/assets/workflow-bootstrap.gif)
 
@@ -109,11 +109,10 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
    - **Title** — a one-line overview, for fast future retrieval
    - **Origin / why it exists** (+ **Notes**) — the context behind it
    - **✓ Writeup** — once it's done, *how* it was done (commits, files)
-5. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything.
 
 *[**Read the full study here →**](Research/token_comparison/MASTER_SUMMARY.md)*
 
-**How it works:** WorkBoard's figures are *measured* (its real `card.py` recall + real bootstrap, run against a frozen snapshot of real Claude-Code history); each peer comes from its own published numbers or a real sandboxed run. **What the rows mean:**
+**How it works:** WorkBoard's figures are *measured* (its real recall + real bootstrap, run against a frozen snapshot of real Claude-Code history); each peer comes from its own published numbers or a real sandboxed run. **What the rows mean:**
 
 - **Build the memory** — the one-time cost to turn your *past* history into memory.
 - **Persist / session** — the ongoing cost to *save* each new session's work.
@@ -172,7 +171,7 @@ The 130 KB+ `board.json` is **never auto-loaded** — context stays clean no mat
 WorkBoard is cheaper because it **only records what gets carded** — structured *outcomes* (what shipped, why, how), **not your entire raw conversation**. That's a real trade-off:
 
 - **It can't recall what was never carded.** If a detail only ever lived in chat and was never written to a card, the board doesn't hold it. In our 20-query test, **1 was an off-board fact** WorkBoard simply couldn't answer — a vector store could.
-- **For vague or single-fact recall, a vector memory can win.** On the recall test WorkBoard beat claude-mem on **16/19** queries — but lost **3/19** (tight single-fact pinpoints), and mem0 / Letta inject a smaller bundle per single lookup. WorkBoard wins the *loop* and the multi-card *lifecycle* questions, **not every individual lookup.**
+- **For vague or single-fact recall, a vector memory can win.** mem0 / Letta inject a smaller bundle per single lookup, and a vector store can surface things that were never explicitly carded. WorkBoard wins the *loop* and the multi-card *lifecycle* questions, **not every individual lookup.**
 - **It needs the carding habit, and it's project-scoped.** The work has to actually get carded (hook-enforced, but still discipline), and a board is per-project — not cross-project memory.
 
 **So run both.** WorkBoard is the structured project ledger; pair it with a vector memory (mem0, claude-mem, Letta) for the vague *"what did I once say about X?"* recall it doesn't try to cover. They're complements, not substitutes.

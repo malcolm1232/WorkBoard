@@ -47,3 +47,6 @@ board/.replay_state.json
 
 # local README preview (gitignored — local-only convenience)
 README.preview.html
+
+# local board snapshots (manual saves) — never ship
+kept-boards/

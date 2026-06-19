@@ -9,6 +9,13 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.35 — Faster LLM-reconcile card animation (2026-06-19)
+
+- **LLM reconcile per-card glide 150ms → 60ms** (`scripts/hourly_reconcile.py`,
+  new `_RECONCILE_PACE_MS`) — matches the bootstrap `speedup` tier so a reconcile
+  pass flies through stale-card moves instead of crawling. The task→IP→done hop
+  stays visible via the existing 0.35s In-Progress dwell.
+
 ### 0.9.32 — Quiet bootstrap: no session-refresh clutter, no stuck pulse (2026-06-18)
 
 - **No "session refresh" dividers during bootstrap.** The Logs HUD persists to a
