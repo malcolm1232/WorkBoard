@@ -1,0 +1,14 @@
+{
+  "dataset": "nfcorpus",
+  "split": "test",
+  "n_queries": 323,
+  "n_docs": 3633,
+  "nDCG@10": 0.3054,
+  "Recall@10": 0.1424,
+  "Recall@100": 0.2326,
+  "params": {
+    "k1": 0.9,
+    "b": 0.4,
+    "title_weight": 2.0
+  }
+}

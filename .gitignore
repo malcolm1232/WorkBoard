@@ -47,3 +47,10 @@ board/.replay_state.json
 
 # local README preview (gitignored — local-only convenience)
 README.preview.html
+
+# Research benchmark bulk data — large downloaded datasets (BEIR/LOCOMO) +
+# OpenAI embedding caches (~250MB). Reproducible from the harness scripts (see
+# each Research/*/README.md), so the CODE + REPORTS are tracked, the data is not.
+Research/global-benchmarks/inputs/
+Research/global-benchmarks/results/dense_cache*.json
+Research/retrieval-bakeoff/results/dense_cache.json

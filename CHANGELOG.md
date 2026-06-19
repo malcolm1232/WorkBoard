@@ -9,6 +9,29 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.36 — Natural-language recall: `card.py recall` (BM25F) + `/check` skill (2026-06-19)
+
+- **`card.py recall "<words>"`** — deterministic natural-language search over the
+  board. Upgraded the matcher (`scripts/text_search.py`) from the provisional
+  lexical scorer to **BM25F** (field-weighted Okapi BM25 + exact-literal / `#ref`
+  boosting), chosen by a measured bake-off (recall@k + tokens-per-correct over 20
+  gold queries on a frozen 533-card snapshot). Wins **pinpoint hit@5 = 1.00** at
+  **~268 tokens per correct recall** — zero embeddings, zero vector DB, zero API,
+  zero model call. `--traverse` walks `linkedCards` for multi-card lifecycle
+  recall; `--json` for machine output. (#781/#782)
+- **`/check` skill** — human-facing front door to `card.py recall` (auto-discovers
+  from `skills/`). "/check the auth redirect bug" → top matching card #s. (#785)
+- **Validated triggering** with two agent experiments (12 agents): a
+  self-documenting command name + one SKILL.md action-row reliably get agents to
+  recall from the board (not memory) — no forcing hook needed. (#785)
+- **Benchmarked** against mem0 / claude-mem / Letta / graphify retrieval
+  algorithms and the global BEIR / LOCOMO benchmarks (our BM25 core reproduces the
+  canonical BEIR BM25 nDCG; dense wins prose/chat semantics, lexical wins the
+  literal-heavy work-ledger). Reproducible harnesses + reports under `Research/`.
+  (#784)
+- Code-review hardening: fixed a `--traverse` crash on numless linked cards and a
+  `score()` wrong-card fallback; dropped a dead import. (#781)
+
 ### 0.9.32 — Quiet bootstrap: no session-refresh clutter, no stuck pulse (2026-06-18)
 
 - **No "session refresh" dividers during bootstrap.** The Logs HUD persists to a

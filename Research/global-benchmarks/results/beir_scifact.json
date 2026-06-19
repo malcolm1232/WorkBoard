@@ -1,0 +1,14 @@
+{
+  "dataset": "scifact",
+  "split": "test",
+  "n_queries": 300,
+  "n_docs": 5183,
+  "nDCG@10": 0.6581,
+  "Recall@10": 0.7751,
+  "Recall@100": 0.8759,
+  "params": {
+    "k1": 0.9,
+    "b": 0.4,
+    "title_weight": 2.0
+  }
+}

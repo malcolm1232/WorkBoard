@@ -1,0 +1,20 @@
+Tokenizer: tiktoken-cl100k_base  ·  scored 18/20 queries (those with ≥1 gold card#)
+
+matcher         hit@1  hit@3  hit@5  cov@5  cov@3+walk   tok/q tok/correct
+lexical         0.333  0.389  0.389  0.283       0.238   113.5       291.9
+bm25            0.333  0.389  0.556  0.359       0.246   104.2       268.0
+tfidf_cosine    0.222  0.444  0.444  0.258       0.252   131.2       295.1
+
+By shape (hit@3 / hit@5 / cov@5 / cov@3+walk):
+  lexical:
+    pinpoint   n=5  hit@3=0.6  hit@5=0.6  cov@5=0.533  cov@3+walk=0.533
+    thematic   n=7  hit@3=0.143  hit@5=0.143  cov@5=0.143  cov@3+walk=0.071
+    lifecycle  n=6  hit@3=0.5  hit@5=0.5  cov@5=0.239  cov@3+walk=0.187
+  bm25:
+    pinpoint   n=5  hit@3=0.6  hit@5=1.0  cov@5=0.8  cov@3+walk=0.583
+    thematic   n=7  hit@3=0.143  hit@5=0.286  cov@5=0.107  cov@3+walk=0.071
+    lifecycle  n=6  hit@3=0.5  hit@5=0.5  cov@5=0.285  cov@3+walk=0.169
+  tfidf_cosine:
+    pinpoint   n=5  hit@3=0.8  hit@5=0.8  cov@5=0.583  cov@3+walk=0.583
+    thematic   n=7  hit@3=0.143  hit@5=0.143  cov@5=0.071  cov@3+walk=0.071
+    lifecycle  n=6  hit@3=0.5  hit@5=0.5  cov@5=0.206  cov@3+walk=0.187

@@ -109,7 +109,7 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
    - **Title** — a one-line overview, for fast future retrieval
    - **Origin / why it exists** (+ **Notes**) — the context behind it
    - **✓ Writeup** — once it's done, *how* it was done (commits, files)
-5. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything.
+5. **Recall is a cheap tree-walk.** An agent finds a past workflow by traversing the graph — reading the **title** first, the description *only if needed* → **origin / why** → **how it was done** — a handful of tokens, never a re-read of everything. Natural-language recall is one command: **`card.py recall "the auth-redirect bug from last week"`** surfaces the top matching card #s (a deterministic, zero-dependency BM25F search — no vector DB, no API), then `card.py show <#>` for detail or `--traverse` to walk linked cards. Humans can also just type **`/check <words>`** (the recall skill) to search the board directly.
 
 *[**Read the full study here →**](Research/token_comparison/MASTER_SUMMARY.md)*
 
@@ -164,6 +164,44 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 > *WorkBoard's "Build the memory" figure varies with harvest config (hourly bucket size) — both shown are **under 1.3% of the peer's** per-session compression total, so the **reduction %** is the robust number.*
 
 The 130 KB+ `board.json` is **never auto-loaded** — context stays clean no matter how big the board grows.
+
+### 🎯 Retrieval accuracy — does it surface the *right* card?
+
+Cost is only half the story; a cheap recall that returns the wrong memory is
+worthless. So we also **measured recall@k** for WorkBoard's recall matcher
+(`card.py recall`, a zero-dep **BM25F** ranker) over 20 gold queries on a frozen
+533-card snapshot, and compared *how* each peer retrieves. *(Same tokenizer; full
+study + reproducible harness: [`Research/retrieval-bakeoff/`](Research/retrieval-bakeoff/REPORT.md).)*
+
+Head-to-head against a **real dense baseline** — OpenAI `text-embedding-3-small`
+(the model mem0 & Letta use), embedded on the *same* corpus and queries (`hit@5`):
+
+| Query shape | WorkBoard `recall` (BM25F) | Dense vectors (measured) | Winner |
+|---|--:|--:|:--|
+| **Pinpoint** — exact `#627` / `f93dc43` / `board.html` | **1.00** | 0.40 | 🟢 **WB (decisive)** — embeddings *blur* literals |
+| **Thematic** — open topic, fuzzy wording | 0.29 | **0.43** | dense *(the honest gap)* |
+| **Lifecycle** — "what shipped + what's open" | 0.50 + graph-walk | **0.67** | dense / WB-via-`--traverse` |
+| **Overall** | **hit@5 0.556** | hit@5 0.500 | ~tie |
+| **Tokens per correct · infra** | **~268 · 0 model calls · 0 vector DB** | ~6,956/retrieval · API + vector store | 🟢 **WB (~26×)** |
+
+**Net:** a real embedding model scores **roughly on par overall** (it wins fuzzy
+*thematic*, but **loses *pinpoint* decisively** and ties the rest) — so paying for
+a vector DB + embedding API (plus the peers' per-session/turn LLM tax) buys little
+recall while costing **~26× the tokens**. WorkBoard's deterministic matcher wins
+the shapes a work-ledger leans on (exact reference, lifecycle-via-`--traverse`) at
+near-zero cost and **no infra**, and bridges the thematic gap at the *agent* layer
+(surface cheap entry points → `card.py show` / walk the graph), not with a
+black-box embedding. *(Measured, reproducible: [`Research/retrieval-bakeoff/`](Research/retrieval-bakeoff/REPORT.md).)*
+
+**On the global scale:** we also ran the recall CLI's ranking core on the standard
+public benchmarks (BEIR, LOCOMO) and measured dense on the same data. It
+**reproduces the canonical BM25 numbers** (BEIR SciFact nDCG@10 **0.658** vs
+published 0.665) — i.e. WorkBoard's recall sits in the well-understood **BM25
+tier**: within single-digit points of dense embeddings on prose/chat IR, *ahead*
+of dense on literal/structured recall, at **zero infra**. (Claude/ChatGPT aren't
+rivals here — they're the *model* layer that reasons over what recall hands them;
+on long-context **NIAH** our retriever finds the needle 100% for ~0 tokens.)
+*([`Research/global-benchmarks/`](Research/global-benchmarks/REPORT.md).)*
 
 ---
 

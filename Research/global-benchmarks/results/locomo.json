@@ -1,0 +1,61 @@
+{
+  "n_questions": 1531,
+  "overall": {
+    "bm25": {
+      "recall@3": 0.4542,
+      "recall@5": 0.5096,
+      "recall@10": 0.5768
+    },
+    "dense": {
+      "recall@3": 0.531,
+      "recall@5": 0.6125,
+      "recall@10": 0.7117
+    }
+  },
+  "by_category": {
+    "bm25": {
+      "temporal": {
+        "recall@3": 0.5721,
+        "recall@5": 0.6138,
+        "recall@10": 0.682
+      },
+      "open-domain": {
+        "recall@3": 0.2113,
+        "recall@5": 0.2426,
+        "recall@10": 0.2735
+      },
+      "multi-hop": {
+        "recall@3": 0.1393,
+        "recall@5": 0.1932,
+        "recall@10": 0.2712
+      },
+      "single-hop": {
+        "recall@3": 0.5402,
+        "recall@5": 0.6038,
+        "recall@10": 0.671
+      }
+    },
+    "dense": {
+      "temporal": {
+        "recall@3": 0.6388,
+        "recall@5": 0.7023,
+        "recall@10": 0.7685
+      },
+      "open-domain": {
+        "recall@3": 0.2135,
+        "recall@5": 0.2949,
+        "recall@10": 0.422
+      },
+      "multi-hop": {
+        "recall@3": 0.2487,
+        "recall@5": 0.3331,
+        "recall@10": 0.4663
+      },
+      "single-hop": {
+        "recall@3": 0.6179,
+        "recall@5": 0.7053,
+        "recall@10": 0.8028
+      }
+    }
+  }
+}

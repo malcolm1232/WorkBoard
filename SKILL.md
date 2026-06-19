@@ -188,6 +188,7 @@ reminder every turn (install via `docs/BOOTSTRAP.md` → `--hook all`). This tab
 |---|---|
 | "shipped X" / "deployed Y" / "fixed Z" / "verified" / "done with N" / "landed" | **Must use** — `card.py fly <num> done --writeup "<paragraph>"` |
 | "what's left?" / "status?" / "where are we?" / "what shipped today?" | **Must use** — read the digest first; `card.py list`/`query` for slices |
+| "did we ever do X?" / "where's the card about Y?" / "the auth-redirect thing from last week" | **Must use — `card.py recall "<their words>"`** (deterministic BM25F search; surfaces top entry-point #s — then `card.py show <#>`, or `--traverse` to walk linked cards). Recall from the board, never from memory. |
 | "add a card for X" / "log this" / "track X" / "save for later" | **Must use** — `card.py add` |
 | "move X to backlog/blocked/in-progress" / "this is deferred" / "pause X" | **Must use** — `card.py fly <num> <col>` |
 | You start a substantive unit of work | **Must use — card it NOW** (`add` → `fly inprogress`), don't wait for the ship |

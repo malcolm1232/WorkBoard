@@ -1,0 +1,448 @@
+{
+  "tokenizer": "tiktoken-cl100k_base",
+  "matchers": {
+    "lexical": {
+      "hit@1": 0.333,
+      "hit@3": 0.389,
+      "hit@5": 0.389,
+      "gold_coverage@5": 0.283,
+      "gold_coverage@3+traverse": 0.238,
+      "mean_tokens_top3": 113.5,
+      "tokens_per_correct@3": 291.9,
+      "by_shape": {
+        "pinpoint": {
+          "n": 5,
+          "hit@3": 0.6,
+          "hit@5": 0.6,
+          "gold_coverage@5": 0.533,
+          "gold_coverage@3+traverse": 0.533
+        },
+        "thematic": {
+          "n": 7,
+          "hit@3": 0.143,
+          "hit@5": 0.143,
+          "gold_coverage@5": 0.143,
+          "gold_coverage@3+traverse": 0.071
+        },
+        "lifecycle": {
+          "n": 6,
+          "hit@3": 0.5,
+          "hit@5": 0.5,
+          "gold_coverage@5": 0.239,
+          "gold_coverage@3+traverse": 0.187
+        }
+      }
+    },
+    "bm25": {
+      "hit@1": 0.333,
+      "hit@3": 0.389,
+      "hit@5": 0.556,
+      "gold_coverage@5": 0.359,
+      "gold_coverage@3+traverse": 0.246,
+      "mean_tokens_top3": 104.2,
+      "tokens_per_correct@3": 268.0,
+      "by_shape": {
+        "pinpoint": {
+          "n": 5,
+          "hit@3": 0.6,
+          "hit@5": 1.0,
+          "gold_coverage@5": 0.8,
+          "gold_coverage@3+traverse": 0.583
+        },
+        "thematic": {
+          "n": 7,
+          "hit@3": 0.143,
+          "hit@5": 0.286,
+          "gold_coverage@5": 0.107,
+          "gold_coverage@3+traverse": 0.071
+        },
+        "lifecycle": {
+          "n": 6,
+          "hit@3": 0.5,
+          "hit@5": 0.5,
+          "gold_coverage@5": 0.285,
+          "gold_coverage@3+traverse": 0.169
+        }
+      }
+    },
+    "tfidf_cosine": {
+      "hit@1": 0.222,
+      "hit@3": 0.444,
+      "hit@5": 0.444,
+      "gold_coverage@5": 0.258,
+      "gold_coverage@3+traverse": 0.252,
+      "mean_tokens_top3": 131.2,
+      "tokens_per_correct@3": 295.1,
+      "by_shape": {
+        "pinpoint": {
+          "n": 5,
+          "hit@3": 0.8,
+          "hit@5": 0.8,
+          "gold_coverage@5": 0.583,
+          "gold_coverage@3+traverse": 0.583
+        },
+        "thematic": {
+          "n": 7,
+          "hit@3": 0.143,
+          "hit@5": 0.143,
+          "gold_coverage@5": 0.071,
+          "gold_coverage@3+traverse": 0.071
+        },
+        "lifecycle": {
+          "n": 6,
+          "hit@3": 0.5,
+          "hit@5": 0.5,
+          "gold_coverage@5": 0.206,
+          "gold_coverage@3+traverse": 0.187
+        }
+      }
+    }
+  },
+  "n_scored": 18,
+  "n_total": 20,
+  "per_query_bm25": [
+    {
+      "id": "P01",
+      "shape": "pinpoint",
+      "q": "Which commit fixed the #627 silent-drop bootstrap bug?",
+      "gold": [
+        627
+      ],
+      "top3": [
+        627,
+        640,
+        647
+      ],
+      "hit@3": true,
+      "cov@5": 1.0,
+      "cov@3+traverse": 1.0,
+      "tok": 96
+    },
+    {
+      "id": "P02",
+      "shape": "pinpoint",
+      "q": "What card number tracks the per-session pulse + CAS lost-update fix, a",
+      "gold": [
+        608,
+        609,
+        624
+      ],
+      "top3": [
+        624,
+        609,
+        643
+      ],
+      "hit@3": true,
+      "cov@5": 1.0,
+      "cov@3+traverse": 0.67,
+      "tok": 94
+    },
+    {
+      "id": "P04",
+      "shape": "pinpoint",
+      "q": "Which plugin version shipped the de-dilution + #74 batch-detector + #7",
+      "gold": [
+        74,
+        75
+      ],
+      "top3": [
+        454,
+        452,
+        378
+      ],
+      "hit@3": false,
+      "cov@5": 0.5,
+      "cov@3+traverse": 0.0,
+      "tok": 98
+    },
+    {
+      "id": "P05",
+      "shape": "pinpoint",
+      "q": "What card number is the 'review-coverage' feature?",
+      "gold": [
+        598
+      ],
+      "top3": [
+        597,
+        605,
+        599
+      ],
+      "hit@3": false,
+      "cov@5": 1.0,
+      "cov@3+traverse": 1.0,
+      "tok": 208
+    },
+    {
+      "id": "P07",
+      "shape": "pinpoint",
+      "q": "What card numbers were placed in the Accepted Tradeoffs column for mul",
+      "gold": [
+        634,
+        635,
+        636,
+        637
+      ],
+      "top3": [
+        633,
+        636,
+        609
+      ],
+      "hit@3": true,
+      "cov@5": 0.5,
+      "cov@3+traverse": 0.25,
+      "tok": 96
+    },
+    {
+      "id": "T01",
+      "shape": "thematic",
+      "q": "What changed around the bootstrap / history-replay path during May 202",
+      "gold": [
+        570,
+        627,
+        640,
+        645
+      ],
+      "top3": [
+        305,
+        575,
+        106
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 86
+    },
+    {
+      "id": "T02",
+      "shape": "thematic",
+      "q": "What's the story of live-carding enforcement \u2014 discipline vs hook \u2014 fr",
+      "gold": [
+        73,
+        74,
+        75
+      ],
+      "top3": [
+        366,
+        279,
+        213
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 100
+    },
+    {
+      "id": "T03",
+      "shape": "thematic",
+      "q": "What perf/UX work happened on board.html drag and pulse animations?",
+      "gold": [
+        494,
+        502,
+        503,
+        535
+      ],
+      "top3": [
+        72,
+        254,
+        587
+      ],
+      "hit@3": false,
+      "cov@5": 0.25,
+      "cov@3+traverse": 0.0,
+      "tok": 78
+    },
+    {
+      "id": "T04",
+      "shape": "thematic",
+      "q": "What did the multi-board / reconciliation work cover when v2 shipped?",
+      "gold": [
+        633
+      ],
+      "top3": [
+        440,
+        107,
+        444
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 80
+    },
+    {
+      "id": "T05",
+      "shape": "thematic",
+      "q": "What's the comparison framing between WorkBoard and claude-mem / memor",
+      "gold": [
+        563,
+        673
+      ],
+      "top3": [
+        673,
+        377,
+        88
+      ],
+      "hit@3": true,
+      "cov@5": 0.5,
+      "cov@3+traverse": 0.5,
+      "tok": 75
+    },
+    {
+      "id": "T06",
+      "shape": "thematic",
+      "q": "What changed around the SessionStart digest in early June?",
+      "gold": [
+        576
+      ],
+      "top3": [
+        290,
+        99,
+        260
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 87
+    },
+    {
+      "id": "T07",
+      "shape": "thematic",
+      "q": "What were the major UI-iteration tradeoffs the user settled on for boa",
+      "gold": [
+        503
+      ],
+      "top3": [
+        686,
+        222,
+        89
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 80
+    },
+    {
+      "id": "L01",
+      "shape": "lifecycle",
+      "q": "What shipped and what's still open from the recon hardening sequence a",
+      "gold": [
+        627,
+        639,
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ],
+      "top3": [
+        627,
+        609,
+        381
+      ],
+      "hit@3": true,
+      "cov@5": 0.11,
+      "cov@3+traverse": 0.11,
+      "tok": 99
+    },
+    {
+      "id": "L02",
+      "shape": "lifecycle",
+      "q": "What is the state of the per-session pulse work \u2014 what shipped, what's",
+      "gold": [
+        608,
+        609,
+        610,
+        611,
+        624
+      ],
+      "top3": [
+        608,
+        624,
+        602
+      ],
+      "hit@3": true,
+      "cov@5": 0.6,
+      "cov@3+traverse": 0.4,
+      "tok": 277
+    },
+    {
+      "id": "L03",
+      "shape": "lifecycle",
+      "q": "What are the four 'accepted concurrency tradeoffs' on the board and wh",
+      "gold": [
+        634,
+        635,
+        636,
+        637
+      ],
+      "top3": [
+        633,
+        557,
+        361
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 97
+    },
+    {
+      "id": "L04",
+      "shape": "lifecycle",
+      "q": "What were the open items at end-of-day 2026-06-09 and which of them ha",
+      "gold": [
+        570,
+        572,
+        573,
+        576,
+        577
+      ],
+      "top3": [
+        87,
+        536,
+        235
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 84
+    },
+    {
+      "id": "L05",
+      "shape": "lifecycle",
+      "q": "Trace the carding-law hardening \u2014 origin, what guards shipped, and whi",
+      "gold": [
+        103,
+        107,
+        384
+      ],
+      "top3": [
+        485,
+        482,
+        483
+      ],
+      "hit@3": false,
+      "cov@5": 0.0,
+      "cov@3+traverse": 0.0,
+      "tok": 70
+    },
+    {
+      "id": "L06",
+      "shape": "lifecycle",
+      "q": "What is the install/restore protocol after a /clean-slate and which ba",
+      "gold": [
+        626,
+        668
+      ],
+      "top3": [
+        668,
+        665,
+        370
+      ],
+      "hit@3": true,
+      "cov@5": 1.0,
+      "cov@3+traverse": 0.5,
+      "tok": 71
+    }
+  ]
+}

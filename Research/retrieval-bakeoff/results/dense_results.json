@@ -1,0 +1,26 @@
+{
+  "model": "text-embedding-3-small",
+  "n": 18,
+  "overall": {
+    "hit@1": 0.278,
+    "hit@3": 0.444,
+    "hit@5": 0.5
+  },
+  "by_shape": {
+    "pinpoint": {
+      "n": 5,
+      "hit@3": 0.4,
+      "hit@5": 0.4
+    },
+    "thematic": {
+      "n": 7,
+      "hit@3": 0.286,
+      "hit@5": 0.429
+    },
+    "lifecycle": {
+      "n": 6,
+      "hit@3": 0.667,
+      "hit@5": 0.667
+    }
+  }
+}

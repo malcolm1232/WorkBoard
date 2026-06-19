@@ -1,0 +1,9 @@
+{
+  "dataset": "scifact",
+  "model": "text-embedding-3-small",
+  "n_queries": 300,
+  "n_docs": 5183,
+  "nDCG@10": 0.7297,
+  "Recall@10": 0.8576,
+  "Recall@100": 0.97
+}

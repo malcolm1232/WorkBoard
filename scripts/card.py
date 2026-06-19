@@ -381,6 +381,9 @@ def build_parser():
                                "redirect bug\". Then `card.py show <#>` for detail.")
     prec.add_argument("query", help="what you're trying to remember")
     prec.add_argument("--top", type=int, default=3, help="how many matches (default 3)")
+    prec.add_argument("--traverse", action="store_true",
+                      help="also surface cards linked to the top matches (walk the "
+                           "graph — for multi-card 'what shipped + what's open' recall)")
     prec.add_argument("--json", action="store_true", help="emit JSON instead of text")
     prec.set_defaults(fn=cmd_recall)
 
@@ -476,16 +479,27 @@ def _hoist_board(argv):
 
 
 def cmd_recall(args, d, board):
-    """Natural-language recall (#781 H1): rank cards by the lexical matcher and
-    print the top matches as #N + title (the cheap index layer). Read-only — the
-    caller then `card.py show <#>` for any card's detail."""
+    """Natural-language recall (#781): rank cards with the BM25F matcher and print
+    the top matches as #N + title (the cheap index layer). Read-only — the caller
+    then `card.py show <#>` for detail, or `--traverse` to walk linked cards."""
     import json as _json
     import text_search
-    hits = text_search.rank(args.query, d.get("cards", []), top=args.top)
+    cards = d.get("cards", [])
+    hits = text_search.rank(args.query, cards, top=args.top)
+    by_num = {c["num"]: c for c in cards if c.get("num") is not None}
+    linked = []
+    if getattr(args, "traverse", False) and hits:
+        seeds = [c.get("num") for _, c in hits]
+        extra = text_search.expand_links(seeds, cards, hops=1) - set(seeds)
+        linked = [by_num[n] for n in sorted(extra) if n in by_num]
     if getattr(args, "json", False):
-        print(_json.dumps([{"num": c.get("num"), "title": c.get("title"),
-                            "column": c.get("column"), "score": round(s, 2)}
-                           for s, c in hits], indent=2))
+        print(_json.dumps({
+            "matches": [{"num": c.get("num"), "title": c.get("title"),
+                         "column": c.get("column"), "score": round(s, 2)}
+                        for s, c in hits],
+            "linked": [{"num": c.get("num"), "title": c.get("title"),
+                        "column": c.get("column")} for c in linked],
+        }, indent=2))
         return
     if not hits:
         print("no strong match — try different words, or `card.py list`")
@@ -493,6 +507,10 @@ def cmd_recall(args, d, board):
     print(f"Top {len(hits)} match(es) — `card.py show <#>` for detail:")
     for s, c in hits:
         print(f"  #{c.get('num')}  {c.get('title')}   ({c.get('column')} · {s:.2f})")
+    if linked:
+        print("Linked (walk the graph):")
+        for c in linked:
+            print(f"  #{c.get('num')}  {c.get('title')}   ({c.get('column')})")
 
 
 def cmd_board_new(args):

@@ -1,0 +1,9 @@
+{
+  "dataset": "nfcorpus",
+  "model": "text-embedding-3-small",
+  "n_queries": 323,
+  "n_docs": 3633,
+  "nDCG@10": 0.3852,
+  "Recall@10": 0.1845,
+  "Recall@100": 0.3621
+}
