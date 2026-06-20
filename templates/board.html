@@ -745,6 +745,7 @@
   .card-progress .bar { flex: 1; height: 3px; background: #dfe1e6; border-radius: 2px; overflow: hidden; }
   .card-progress .bar > div { height: 100%; background: var(--accent); }
   .card[data-col="done"] .card-progress .bar > div { background: var(--green); }
+  .card[data-col="deployed"] .card-progress .bar > div { background: var(--green); }
 
   /* Live progress banner (hourly_extractor): taller, more visible bar
      with a subtle pulse on the running fill. */
@@ -4923,8 +4924,10 @@ const BOHO_CYCLE = [
 ];
 function colBohoBg(col) {
   if (!col) return BOHO_CYCLE[0];
-  if (col.id === 'done') return BOHO_DONE;
-  const nonDone = (state && state.columns || []).filter(c => c.id !== 'done');
+  // #472 — 'done' column AND any done-kind column (e.g. a custom "Deployed")
+  // are pinned to morning-mist sage so they read as success/green like Done.
+  if (col.id === 'done' || col.kind === 'done') return BOHO_DONE;
+  const nonDone = (state && state.columns || []).filter(c => c.id !== 'done' && c.kind !== 'done');
   let i = nonDone.findIndex(c => c.id === col.id);
   if (i < 0) i = 0;
   return BOHO_CYCLE[i % BOHO_CYCLE.length];
