@@ -98,6 +98,7 @@ never burns a call needlessly.
 | SessionStart spawns it **detached** with `env -u CLAUDECODE` (forces the Haiku path, not the in-session prose `recon_pending` path). `BOARD_NO_RECON=1` opt-out. | `hook_session_start.sh` | `13716e1` |
 | Bootstrap fill+recon also run Haiku — `env -u CLAUDECODE` on the two `serve.py --bootstrap` spawns. | `hook_session_start.sh`, `bootstrap_project.sh` | `1212b0f` |
 | Skip SessionStart recon on the bootstrap turn (it was racing the still-streaming fill → lost-update on the full-replace POST). | `hook_session_start.sh` | `0cc5ce9` |
+| **SessionStart reconcile REMOVED (#800).** The rows above describe the original design; SessionStart no longer reconciles. The hook now spawns `--backfill-only` (dropped-card recovery only, `_backfill_failed_buckets`), not `--reconcile-only`. The `--reconcile-only` mode + its gates/`.recon_state.json` (rows 97‑98) survive for manual/test use; only the startup wiring changed. Bootstrap recon (rows 96, 99‑100) is unaffected. | `hook_session_start.sh`, `hourly_extractor.py` | working tree |
 
 **Two load-bearing gotchas (documented so v3 doesn't reintroduce them):**
 1. `reconcile_sweep`'s candidate filter required the `"discovered"` tag — that

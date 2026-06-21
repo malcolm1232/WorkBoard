@@ -1233,6 +1233,11 @@ def main():
                          "reconcile every non-done card against activity since "
                          "the last recon (gated to avoid a Haiku call when "
                          "there's nothing new). No card creation.")
+    ap.add_argument("--backfill-only", action="store_true",
+                    help="SessionStart recovery only: re-create cards a prior "
+                         "PARTIAL bootstrap dropped (#645), WITHOUT the Haiku "
+                         "reconcile sweep. No-op on a healthy board (no "
+                         "partial/failed_buckets state). No card moves.")
     args = ap.parse_args()
     if args.reconcile_only:
         proj, brd = args.project.resolve(), args.board.resolve()
@@ -1240,6 +1245,14 @@ def main():
         # BEFORE reconciling, so the recovered cards are reconciled too.
         _backfill_failed_buckets(proj, brd)
         _run_reconcile_only(proj, brd)
+        return
+    if args.backfill_only:
+        # Recovery WITHOUT reconcile (#800): heal a partial bootstrap's dropped
+        # cards but never run the autonomous Haiku reconcile sweep. Used by
+        # SessionStart so a fresh session no longer reconciles, yet a botched
+        # bootstrap still self-heals on the next start.
+        proj, brd = args.project.resolve(), args.board.resolve()
+        _backfill_failed_buckets(proj, brd)
         return
     if args.estimate_only:
         est = estimate_fill(

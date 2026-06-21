@@ -145,9 +145,9 @@ The board is only useful if it's a **faithful mirror of reality**. Reconciliatio
 ### Two complementary layers
 
 - **Live carding backstop — the Stop hook** (`_hook_stop_recon.py`). Cheap, **no LLM**. On sign-off it checks: did this turn ship work (edits/commits) but run no `card.py`? If so it *blocks* and says "card it now." This is the in-the-moment guarantee for **move 3** (net-new un-carded work). Always on, ~free.
-- **Smart reconciliation — Haiku** (`hourly_reconcile.reconcile_sweep`). A `claude -p --model haiku` pass that reads the recent activity and applies **moves 1, 2, 4** to existing cards, animating them on the live board. Runs at **two triggers**:
+- **Smart reconciliation — Haiku** (`hourly_reconcile.reconcile_sweep`). A `claude -p --model haiku` pass that reads the recent activity and applies **moves 1, 2, 4** to existing cards, animating them on the live board. Runs at **one trigger**:
   - **Bootstrap** — after the initial history-mine fills the board (post-extraction sweep).
-  - **SessionStart** — `hourly_extractor --reconcile-only`, spawned **detached** so the digest stays instant. Reconciles *every* non-done card (`only_discovered=False`) against the activity since the last recon.
+  - **SessionStart — reconcile REMOVED (#800).** A fresh session no longer reconciles autonomously. SessionStart now spawns `hourly_extractor --backfill-only` (detached) which runs *only* the dropped-card recovery (`_backfill_failed_buckets` — heals a partial bootstrap), never the reconcile sweep. The `--reconcile-only` mode still exists for manual/test use but is no longer wired to startup.
 
 ### Why these triggers (not others)
 
@@ -225,7 +225,7 @@ If you find yourself responding to a substantive prompt without having read thes
    │   ├── hourly_*                    ── BRANCH: history-extraction + reconciliation pipeline (acyclic) ──
    │   │   ├── hourly_common.py        shared helpers (bottom of the chain)
    │   │   ├── hourly_extract_llm.py    LLM dispatch + retry ladder leaf: extract_cards_for_chunk / ChunkExtractionError (#627) / _extract_chunk_with_retries (→common only)
-   │   │   ├── hourly_extractor.py     orchestration: bucket → chunk → run; also --reconcile-only (SessionStart smart-recon, gated, .recon_state.json)
+   │   │   ├── hourly_extractor.py     orchestration: bucket → chunk → run; --backfill-only (SessionStart dropped-card recovery, #800) + --reconcile-only (manual/test smart-recon, gated, .recon_state.json)
    │   │   ├── hourly_emit.py          emit ONE card
    │   │   └── hourly_reconcile.py     Haiku reconcile sweep (only_discovered flag) — runs at BOOTSTRAP + SessionStart
    │   │

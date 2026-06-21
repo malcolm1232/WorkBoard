@@ -432,6 +432,30 @@ def test_recon_replay_gate(ctx: Ctx):
                     GATE_MSG not in out, "gate still firing after replay completed")
 
 
+def test_backfill_only_noop_healthy(ctx: Ctx):
+    """#800: SessionStart now spawns `--backfill-only`, NOT `--reconcile-only`.
+    On a healthy board (no partial-bootstrap state) it must be a fast no-op:
+    the dropped-card recovery runs but finds nothing, and — critically — it must
+    NEVER reconcile (no 'recon-only:' / 'moved N card(s)' output). This guards the
+    real startup path the hook uses, so a regression that reintroduced reconcile
+    at SessionStart would fail here."""
+    def run(bj):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "hourly_extractor.py"),
+             "--project", str(bj.parent.parent), "--board", str(bj),
+             "--backfill-only"], capture_output=True, text=True, timeout=30)
+
+    # A non-done card present, but no replay/partial state on disk → backfill has
+    # nothing to recover and reconcile must not run.
+    bj = ctx.board([ctx.card(1, "inprogress", "wip")])
+    r = run(bj)
+    ctx.assert_true("backfill-only: clean exit", r.returncode == 0,
+                    f"non-zero exit: {r.returncode} / {r.stderr[:200]}")
+    ctx.assert_true("backfill-only: never reconciles",
+                    "recon-only:" not in r.stderr and "moved" not in r.stderr,
+                    f"unexpected reconcile output: {r.stderr[:200]}")
+
+
 def test_recon_claudecode_path(ctx: Ctx):
     """CLAUDECODE=1 → prose recon_pending (no Haiku). The unset→Haiku side is the
     recon-haiku E2E. This proves the spawn's `env -u CLAUDECODE` is load-bearing."""
@@ -546,7 +570,8 @@ GROUPS = {
                     test_concurrent_mixed, test_session_key_consistency,
                     test_concurrent_port_assign, test_concurrent_recon_pending],
     "recon": [test_recon_only_discovered_flag, test_recon_gates_short_circuit,
-              test_recon_replay_gate, test_recon_claudecode_path],
+              test_recon_replay_gate, test_backfill_only_noop_healthy,
+              test_recon_claudecode_path],
     "review-backfill": [test_review_backfill_detect_extract, test_review_backfill_emit_stamp],
     "recon-haiku": [test_recon_haiku_e2e],
 }
