@@ -9,6 +9,21 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.38 — Drop per-session SessionStart reconcile (2026-06-21)
+
+- **SessionStart no longer reconciles.** The autonomous Haiku reconcile sweep
+  that ran on every session start is removed. SessionStart now spawns
+  `hourly_extractor.py --backfill-only` (new flag) which runs *only* the
+  partial-bootstrap dropped-card recovery (`_backfill_failed_buckets`), never the
+  reconcile sweep — a no-op on a healthy board (`scripts/hook_session_start.sh`,
+  `scripts/hourly_extractor.py`). The `--reconcile-only` mode still exists for
+  manual/test use; only the startup wiring changed. Bootstrap is unaffected.
+- Docs updated (`VISION.md`, `docs/ARCH_REDESIGN_V2.md`); e2e gains
+  `test_backfill_only_noop_healthy`.
+- **To receive this, existing users must update**: `/plugin marketplace update
+  workboard` → update `board-steward` → `/reload-plugins` (custom marketplaces
+  don't auto-update unless the user enabled it).
+
 ### 0.9.35 — Faster LLM-reconcile card animation (2026-06-19)
 
 - **LLM reconcile per-card glide 150ms → 60ms** (`scripts/hourly_reconcile.py`,

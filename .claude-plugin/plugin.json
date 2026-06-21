@@ -1,7 +1,7 @@
 {
   "name": "board-steward",
   "displayName": "WorkBoard — Board Steward",
-  "version": "0.9.35",
+  "version": "0.9.38",
   "description": "Live project kanban for Claude Code. Auto-tracks shipped / fixed / deferred work as cards on a board.json + live HTML board (127.0.0.1:7891), survives sessions via a SessionStart digest, auto-links edited files to their cards, and backstops un-carded work on Stop. Bootstraps a fresh board by mining past session history.",
   "author": {
     "name": "malco"
