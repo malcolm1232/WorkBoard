@@ -33,6 +33,8 @@ cd WorkBoard
 
 **Requirements:** Claude Code · Python 3.9+ (standard library only, no `pip install`) · macOS / Linux / Windows. **No account, no cloud, no API key required.** (History Replay's optional bootstrap uses Claude Haiku — the cheapest tier — as a one-time, detached subprocess.)
 
+**Where your board lives:** every board is a single file at **`<project>/board/board.json`**, with rolling backups in `board/.backups/`. You never have to hunt for it — whenever you ask Claude for the workboard, *this* is the board that opens (creating a new one opens it in your browser automatically).
+
 ---
 
 ## The problem

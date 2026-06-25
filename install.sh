@@ -285,6 +285,8 @@ fi
 echo
 if [ "$SERVER_OK" = "1" ]; then
   ok "Done. Board live at ${URL}"
+  echo "    Board file: ${PROJECT}/board/board.json   (rolling backups in board/.backups/)"
+  echo "    This is the board that opens whenever you ask Claude for the workboard."
 else
   warn "Install incomplete — board server did not come up (see ${PROJECT}/.board-server.log)"
 fi

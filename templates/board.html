@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Work Board</title>
+<title>WorkBoard</title>
+<!-- #832 — WB mark as the browser-tab favicon so WorkBoard is easy to spot among
+     many open Chrome tabs. Inline emoji SVG = no extra request, no favicon.ico 404. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='52' font-size='80' text-anchor='middle' dominant-baseline='central'>🗂️</text></svg>">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -1670,7 +1673,7 @@
 
 <header>
   <span class="title-wrap">
-    <h1 id="board-title" title="Click to go to Board · double-click to rename">Work Board</h1>
+    <h1 id="board-title" title="Click to go to Board · double-click to rename">WorkBoard</h1>
     <span class="status" id="status" title="Connection status"><span class="dot"></span></span>
   </span>
   <span class="sp"></span>
@@ -4618,7 +4621,11 @@ function applyBoardTitle() {
   const el = $('#board-title');
   if (!el || !state) return;
   if (el.dataset.editing === '1') return; // don't clobber mid-edit
-  const t = (state.title || '').trim() || 'WorkBoard';
+  // #832 — show the project name centered. Strip a redundant trailing
+  // "— Work Board" / "— WorkBoard" so legacy titles like "QuantifyMe — Work Board"
+  // read cleanly as just "QuantifyMe". Empty title → "WorkBoard".
+  const proj = (state.title || '').trim().replace(/\s*[—–-]\s*work\s*board\s*$/i, '').trim();
+  const t = proj || 'WorkBoard';
   el.textContent = t;
   document.title = t;
 }

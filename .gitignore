@@ -50,3 +50,6 @@ README.preview.html
 
 # local board snapshots (manual saves) — never ship
 kept-boards/
+
+# personal/local scratch — handover notes, session RTFs, etc. (never ship)
+mal_presonal_others/

@@ -9,6 +9,25 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.39 — Tab favicon, board-new auto-open, board-location docs (2026-06-25)
+
+- **`card.py board-new` now auto-opens the board** in the browser via
+  `board_autoopen.sh` (Chrome-tab dedupe, honors `BOARD_NO_AUTO_OPEN=1`),
+  matching `bootstrap_project.sh`. Fires on both the fresh-create and the
+  already-running paths, so "create a new board" reliably shows it instead of
+  just printing a URL (`scripts/card.py`, #833).
+- **Browser-tab favicon** — the 🗂️ WorkBoard mark is now the tab icon (inline
+  emoji-SVG data-URI), so WorkBoard is easy to spot among many Chrome tabs; also
+  clears the old `favicon.ico` 404 (`templates/board.html`, #832).
+- **Header title reads clean** — `applyBoardTitle` strips a redundant trailing
+  "— Work Board" / "— WorkBoard" so legacy titles like "QuantifyMe — Work Board"
+  show as just "QuantifyMe" (`templates/board.html`, #832).
+- **Board location surfaced to users** — `install.sh` and the README now state
+  every board lives at `<project>/board/board.json` (rolling backups in
+  `board/.backups/`), so users never have to hunt for it (#834).
+- **To receive this, existing users must update**: `/plugin marketplace update
+  workboard` → update `board-steward` → `/reload-plugins`.
+
 ### 0.9.38 — Drop per-session SessionStart reconcile (2026-06-21)
 
 - **SessionStart no longer reconciles.** The autonomous Haiku reconcile sweep
