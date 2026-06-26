@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -250,7 +251,6 @@ def _board_present(board_dir) -> bool:
 
 def _port_healthy(port: int, timeout: float = 0.4) -> bool:
     """True if a board server answers /health on this port."""
-    import urllib.request
     try:
         with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/health", timeout=timeout) as r:
@@ -731,6 +731,10 @@ class BoardHandler(BaseHTTPRequestHandler):
         """POST /ensure-board?path=<board_dir> — #841. Ensure that project's
         server is up (spawn if down) and return its url. Only spawns paths the
         registry already knows (no arbitrary process spawn)."""
+        # Drain any request body so HTTP/1.1 keep-alive framing stays intact.
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > 0:
+            self.rfile.read(length)
         import port_registry as _pr
         qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         target = (qs.get("path") or [""])[0]
