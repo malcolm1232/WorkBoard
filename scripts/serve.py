@@ -227,9 +227,22 @@ def _gated_stream(fn, *fn_args) -> None:
     fn(*fn_args)
 
 
+def _board_title_for(board_dir) -> str | None:
+    """Best-effort read of a board's raw `title` for the /boards tab row.
+    Returns None if the board.json is missing/unreadable. Normalization is done
+    client-side (cleanProjectTitle) so the logic isn't duplicated here."""
+    try:
+        data = json.loads((Path(board_dir) / "board.json").read_text())
+        t = data.get("title")
+        return t if isinstance(t, str) and t.strip() else None
+    except Exception:
+        return None
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     board_dir: Path = None  # set by main()
     auth_token: str | None = None  # set by main() — #116 LAN-AUTH; None = open
+    port: int | None = None  # set by main() — own port, for /boards current_port
     protocol_version = "HTTP/1.1"
 
     def _check_auth(self) -> tuple[bool, str | None]:
@@ -447,6 +460,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_divider()
         elif path == "/health":
             self._handle_health()
+        elif path == "/boards":
+            self._handle_boards()
         elif path == "/tags":
             self._send_tags_page()
         elif path.startswith("/archive/"):
@@ -618,6 +633,41 @@ class BoardHandler(BaseHTTPRequestHandler):
             "ts": datetime.now(timezone.utc).isoformat(),
         }).encode()
         self._send(200, body)
+
+    def _handle_boards(self):
+        """GET /boards — #841 project switcher. Lists every known project from
+        the port-assignments registry: path, port, raw title, and whether its
+        server is currently alive. Read-only; never touches board.json."""
+        import port_registry as _pr
+        try:
+            assigns = _pr.assignments() or {}
+        except Exception:
+            assigns = {}
+        try:
+            reg = _pr.read() or {}
+        except Exception:
+            reg = {}
+        boards = []
+        for path, port in assigns.items():
+            entry = reg.get(path) or {}
+            pid = entry.get("pid")
+            running = False
+            if pid:
+                try:
+                    running = _pr._pid_alive(int(pid))
+                except Exception:
+                    running = False
+            boards.append({
+                "path": path,
+                "port": port,
+                "title": _board_title_for(path),
+                "running": running,
+            })
+        boards.sort(key=lambda b: b["port"])
+        self._send(200, json.dumps({
+            "boards": boards,
+            "current_port": type(self).port,
+        }).encode())
 
     def _handle_archive(self, path):
         """GET /archive/<rel> — serve an archived board snapshot (path-safe)."""
@@ -1019,6 +1069,7 @@ def _run_server(board_dir, args):
     """Configure the handler, register our port, and serve until interrupted."""
     BoardHandler.board_dir = board_dir
     BoardHandler.auth_token = args.auth_token or None
+    BoardHandler.port = args.port
     _load_initial_cache(board_dir)
     # Resolve THIS board's designated port (#374). Idempotent + sticky: the
     # board keeps the same port across restarts, and a second project whose
