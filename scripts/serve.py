@@ -261,8 +261,9 @@ def _port_healthy(port: int, timeout: float = 0.4) -> bool:
 
 def _spawn_board(board_dir, port: int) -> bool:
     """Spawn a board server for board_dir on `port`, detached, then poll /health
-    until up (~5s). Returns True once healthy. Uses the SAME launch pattern as
-    hook_session_start.sh / bootstrap_project.sh so behavior is identical."""
+    until up (~5s). Returns True once healthy. Detached launch equivalent to the
+    nohup/disown pattern in hook_session_start.sh / bootstrap_project.sh (here via
+    Popen(start_new_session=True)), so the spawned server behaves the same."""
     proj_root = str(Path(board_dir).resolve().parent)  # board_dir is <root>/board
     serve_py = str(Path(__file__).resolve())
     log = str(Path(proj_root) / ".board-server.log")

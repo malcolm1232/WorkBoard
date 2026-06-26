@@ -70,8 +70,8 @@ def test():
     check(ports == [7891, 7892, 7893], f"ordered by port asc, got {ports}")
     check(data["current_port"] == 7891, "current_port echoes this board's port")
     by_port = {b["port"]: b for b in data["boards"]}
-    check(by_port[7891]["running"] is True, "AAA running (in registry, pid alive)")
-    check(by_port[7893]["running"] is False, "BBB not running (absent from registry)")
+    check(by_port[7891]["running"] is True, "AAA running (live /health probe ok)")
+    check(by_port[7893]["running"] is False, "BBB not running (live /health probe fails)")
     check(by_port[7891]["title"] == "WorkBoard", "raw title passed through (norm is client-side)")
     check(by_port[7892]["title"] is None, "missing title → None")
     check(7894 not in by_port, "GONE board (no board.json) omitted from /boards")
