@@ -118,7 +118,11 @@ def bootstrap_board(board_dir: Path, profile: str = "software",
     if not target_json.exists() and TEMPLATE_JSON.exists():
         data = json.loads(TEMPLATE_JSON.read_text())
         project_name = title_override or _detect_project_name(board_dir.parent)
-        data["title"] = f"WorkBoard — {project_name}"
+        # #837/#838 — store JUST the project name. The browser tab + centered
+        # header derive from this; a "WorkBoard —" prefix is redundant (there's
+        # already a WB favicon) and leaked into the tab title. Legacy boards that
+        # still hold "WorkBoard — <name>" are cleaned at render by applyBoardTitle.
+        data["title"] = project_name
         data["tagTaxonomy"] = _load_tag_profile(profile)
         target_json.write_text(json.dumps(data, indent=2))
     # NOTE: we intentionally do NOT copy board.html into the board dir (#72).

@@ -11,14 +11,24 @@
 # (non-macOS, no osascript, or Automation permission denied) so non-Mac/remote
 # users keep working. Honours BOARD_NO_AUTO_OPEN=1 (headless/CI/cron).
 #
-# Usage: board_autoopen.sh <port> [project_dir]
+# Usage: board_autoopen.sh <port> [project_dir] [session_id]
 set -u
 port="${1:?need port}"
 project_dir="${2:-}"
+# #836 — explicit session id (3rd arg) beats the env var. The SessionStart hook
+# parses session_id from stdin but doesn't export it as CLAUDE_CODE_SESSION_ID,
+# so hook-opened tabs used to be sid-less while agent-run board-new tabs (which
+# inherit the env var) had one. Accepting it positionally makes the ?sid reliable
+# regardless of how we were invoked.
+sid="${3:-${CLAUDE_CODE_SESSION_ID:-}}"
 [ "${BOARD_NO_AUTO_OPEN:-0}" = "1" ] && exit 0
 
 url="http://127.0.0.1:${port}"
+# #836 — host-agnostic dedupe: a tab opened as localhost:PORT must count as the
+# same board as one opened as 127.0.0.1:PORT, else the Chrome check below misses
+# it and we open a duplicate. We always OPEN with 127.0.0.1, but MATCH either.
 match="127.0.0.1:${port}"
+match_alt="localhost:${port}"
 
 # #608 — bind the opened board window to THIS Claude Code session so it can pin
 # that session's active card to the top of In-Progress (other sessions' cards
@@ -27,7 +37,7 @@ match="127.0.0.1:${port}"
 # reused (its opener owns the pin; the page falls back to most-recently-claimed
 # when its ?sid session has ended). Empty sid → no param, pure fallback behavior.
 open_url="${url}"
-[ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && open_url="${url}/?sid=${CLAUDE_CODE_SESSION_ID}"
+[ -n "${sid}" ] && open_url="${url}/?sid=${sid}"
 
 # Don't open a dead URL — the board's server must be live.
 curl -s --max-time 0.4 "${url}/health" >/dev/null 2>&1 || exit 0
@@ -79,7 +89,7 @@ tell application "System Events"
     tell application "Google Chrome"
       repeat with w in windows
         repeat with t in tabs of w
-          if (URL of t) contains "${match}" then return "yes"
+          if ((URL of t) contains "${match}") or ((URL of t) contains "${match_alt}") then return "yes"
         end repeat
       end repeat
     end tell

@@ -295,7 +295,11 @@ fi
 # "open". Delegated to board_autoopen.sh (Chrome-tab check → sseClients fallback
 # → opens in Chrome; honours BOARD_NO_AUTO_OPEN).
 if [ -n "${server_health}" ]; then
-  "$(dirname "$0")/board_autoopen.sh" "${server_port}" "${project_dir}" >/dev/null 2>&1 || true
+  # #836 — pass THIS session's id so the opened tab carries ?sid (top-pin). The
+  # id was parsed from stdin above; board_autoopen reads it from $3 (or the env
+  # var as fallback). Without this, hook-opened tabs were sid-less while agent-run
+  # board-new tabs had one → the "some have sid, some don't" inconsistency.
+  "$(dirname "$0")/board_autoopen.sh" "${server_port}" "${project_dir}" "${session_id}" >/dev/null 2>&1 || true
   # #505 — fire a one-shot 'session refresh' divider into the Logs HUD so a fresh
   # session is visually separated from the previous one's activity. Detached +
   # bounded so it never delays startup; waits (≤4s) for a connected SSE client

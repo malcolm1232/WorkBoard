@@ -4616,16 +4616,27 @@ function resetHudsToDefault() {
   requestAnimationFrame(() => { flip(lh, lhFirst); flip(rh, rhFirst); });
 }
 
+// #837/#838 — normalize a board.json `title` to JUST the project name.
+// Strips a redundant "Work Board"/"WorkBoard" affix on EITHER side (any dash:
+// — – -): trailing "QuantifyMe — Work Board" → "QuantifyMe" (#832), AND leading
+// "WorkBoard — DBSearch.AI" → "DBSearch.AI" (legacy bootstrap prefix). Guarded so
+// a project literally named "WorkBoard" is never stripped to empty. Used by both
+// the rendered header/tab and the inline edit box so they read consistently.
+function cleanProjectTitle(raw) {
+  let t = (raw || '').trim();
+  const stripped = t
+    .replace(/^\s*work\s*board\s*[—–-]\s*/i, '')   // leading "WorkBoard —"
+    .replace(/\s*[—–-]\s*work\s*board\s*$/i, '')   // trailing "— Work Board"
+    .trim();
+  return stripped || t;   // never blank a board genuinely named "WorkBoard"
+}
+
 // Read project name from board.json `title` field. Falls back gracefully.
 function applyBoardTitle() {
   const el = $('#board-title');
   if (!el || !state) return;
   if (el.dataset.editing === '1') return; // don't clobber mid-edit
-  // #832 — show the project name centered. Strip a redundant trailing
-  // "— Work Board" / "— WorkBoard" so legacy titles like "QuantifyMe — Work Board"
-  // read cleanly as just "QuantifyMe". Empty title → "WorkBoard".
-  const proj = (state.title || '').trim().replace(/\s*[—–-]\s*work\s*board\s*$/i, '').trim();
-  const t = proj || 'WorkBoard';
+  const t = cleanProjectTitle(state.title) || 'WorkBoard';
   el.textContent = t;
   document.title = t;
 }
@@ -4645,7 +4656,8 @@ function wireBoardTitle() {
     pushUndo();
     el.dataset.editing = '1';
     el.contentEditable = 'true';
-    el.textContent = (state && state.title) ? state.title : 'WorkBoard';
+    // #837/#838 — edit the clean project name, not the legacy "WorkBoard — …" raw.
+    el.textContent = (state && state.title) ? cleanProjectTitle(state.title) : 'WorkBoard';
     el.focus();
     // Select all so first keystroke replaces.
     const r = document.createRange(); r.selectNodeContents(el);
@@ -4657,7 +4669,10 @@ function wireBoardTitle() {
     const v = el.textContent.trim();
     el.contentEditable = 'false';
     el.dataset.editing = '0';
-    if (v && state && v !== state.title) {
+    // #837/#838 — compare against the CLEANED title (what's shown + prefilled),
+    // not the raw stored value. Otherwise a dblclick→blur with no typing on a
+    // legacy "WorkBoard — X" board would persist "X" + bump rev unintentionally.
+    if (v && state && v !== cleanProjectTitle(state.title)) {
       state.title = v;
       scheduleSave();
     }

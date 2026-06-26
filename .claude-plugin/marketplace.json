@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "WorkBoard — live project kanban for Claude Code, distributed as a plugin.",
-    "version": "0.9.39"
+    "version": "0.9.40"
   },
   "plugins": [
     {
       "name": "board-steward",
       "source": "./",
       "description": "Live project kanban for Claude Code. Auto-tracks shipped / fixed / deferred work as cards on a board.json + live HTML board (127.0.0.1:7891), survives sessions via a SessionStart digest, auto-links edited files to their cards, and backstops un-carded work on Stop. Bootstraps a fresh board by mining past session history.",
-      "version": "0.9.39",
+      "version": "0.9.40",
       "author": {
         "name": "malco"
       },

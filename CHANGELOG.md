@@ -9,6 +9,36 @@ uses date-stamped pre-1.0 development entries until the first tagged release.
 
 Pre-release hardening toward `v1.0.0-rc.1`. Built across Plan v2 phases 0–6.
 
+### 0.9.40 — Clean board title + SID/duplicate-window fixes (2026-06-26)
+
+- **Board title shows just the project name** — a new bootstrapped board stored
+  its title as `"WorkBoard — <name>"`, which leaked into the browser tab and the
+  centered header. `serve_bootstrap.py` now stores just the project name, and a
+  new `cleanProjectTitle()` in `board.html` strips a redundant "WorkBoard /
+  Work Board —" affix on *either* side — so legacy boards (e.g.
+  "WorkBoard — DBSearch.AI") render cleanly with no data migration. Used by the
+  header, `document.title` (tab), and the inline title edit box; the edit-commit
+  now compares the cleaned value so a no-op double-click→blur no longer rewrites
+  `board.json` (`templates/board.html`, `scripts/serve_bootstrap.py`, #837/#838).
+- **Auto-open no longer spawns duplicate windows** — the Chrome dedupe matched
+  only `127.0.0.1:PORT`, but servers bind `localhost`, so a `localhost:` tab was
+  missed and a second window opened. The match is now host-agnostic
+  (`127.0.0.1` *or* `localhost`). `card.py board-new` also probes `/health`
+  (which reports the board path) of known ports to find an already-running
+  server before spawning a second `serve.py` (`scripts/board_autoopen.sh`,
+  `scripts/card.py`, #836).
+- **Opened tab reliably carries `?sid`** — the SessionStart hook parsed the
+  session id from stdin but never exported it as `CLAUDE_CODE_SESSION_ID`, which
+  `board_autoopen.sh` read from the env, so hook-opened tabs were sid-less while
+  agent `board-new` tabs had one. The session id is now passed explicitly as a
+  3rd argument (arg → env fallback) from both the hook and `card.py _open`
+  (`scripts/hook_session_start.sh`, `scripts/board_autoopen.sh`,
+  `scripts/card.py`, #836). Note: the In-Progress *pulse* never depended on the
+  URL `?sid` — it comes from the server-side per-session `activeWork` map; the
+  URL `?sid` only selects which card pins to the top of a given window.
+- **To receive this, existing users must update**: `/plugin marketplace update
+  workboard` → update `board-steward` → `/reload-plugins`.
+
 ### 0.9.39 — Tab favicon, board-new auto-open, board-location docs (2026-06-25)
 
 - **`card.py board-new` now auto-opens the board** in the browser via
