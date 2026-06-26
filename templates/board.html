@@ -211,6 +211,18 @@
   }
   header .seg-pill .seg:hover { background: rgba(217,119,87,.14); }
   header .seg-pill .seg-div { align-self: stretch; width: 1px; background: var(--card-border); }
+  /* #841 — project switcher tab row */
+  .project-tabs { display:flex; gap:6px; align-items:center; margin-right:10px; }
+  .project-tabs .proj-tab {
+    font: inherit; font-size:12px; line-height:1; cursor:pointer;
+    padding:5px 10px; border-radius:999px; border:1px solid var(--card-border, #2a2a2a);
+    background:transparent; color:var(--muted, #9aa0a6); white-space:nowrap;
+  }
+  .project-tabs .proj-tab:hover { color:var(--ink, #e8eaed); }
+  .project-tabs .proj-tab.active {
+    background:var(--ink, #3b82f6); color:#fff; border-color:transparent; cursor:default;
+  }
+  .project-tabs .proj-tab.starting { opacity:.6; cursor:progress; }
 
   /* Tag legend popover — anchored under the Tags button */
   .tag-legend {
@@ -1672,6 +1684,7 @@
 <body>
 
 <header>
+  <nav id="project-tabs" class="project-tabs" style="display:none"></nav>
   <span class="title-wrap">
     <h1 id="board-title" title="Click to go to Board · double-click to rename">WorkBoard</h1>
     <span class="status" id="status" title="Connection status"><span class="dot"></span></span>
@@ -4453,6 +4466,7 @@ function enterApp() {
   refreshLogsCommit();
   applyBoardTitle();
   wireBoardTitle();
+  loadProjectTabs();   // #841 — project switcher tab row
   refreshTagLegend();
   setView(_view);
 }
@@ -4629,6 +4643,51 @@ function cleanProjectTitle(raw) {
     .replace(/\s*[—–-]\s*work\s*board\s*$/i, '')   // trailing "— Work Board"
     .trim();
   return stripped || t;   // never blank a board genuinely named "WorkBoard"
+}
+
+// #841 — project switcher. Fetch the known boards and render a tab per project,
+// top-left. Click → ensure that board's server is up → navigate same-tab.
+async function loadProjectTabs() {
+  const nav = document.getElementById('project-tabs');
+  if (!nav) return;
+  let data;
+  try {
+    const r = await fetch('/boards', { credentials: 'same-origin' });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (_) { return; }
+  const boards = (data && data.boards) || [];
+  if (boards.length < 2) { nav.style.display = 'none'; return; }  // nothing to switch to
+  nav.innerHTML = '';
+  for (const b of boards) {
+    const btn = document.createElement('button');
+    btn.className = 'proj-tab' + (b.port === data.current_port ? ' active' : '');
+    btn.textContent = cleanProjectTitle(b.title) || ('Board ' + b.port);
+    btn.title = b.path + (b.running ? '' : ' (stopped — click to start)');
+    if (b.port !== data.current_port) {
+      btn.addEventListener('click', () => switchProject(btn, b));
+    }
+    nav.appendChild(btn);
+  }
+  nav.style.display = 'flex';
+}
+
+async function switchProject(btn, b) {
+  if (btn.classList.contains('starting')) return;
+  btn.classList.add('starting');
+  const prev = btn.textContent;
+  btn.textContent = 'starting…';
+  try {
+    const r = await fetch('/ensure-board?path=' + encodeURIComponent(b.path),
+                          { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) throw new Error('ensure failed');
+    const j = await r.json();
+    window.location = j.url;            // same-tab switch
+  } catch (_) {
+    btn.classList.remove('starting');
+    btn.textContent = prev;
+    if (typeof toast === 'function') toast("Couldn't start that board");
+  }
 }
 
 // Read project name from board.json `title` field. Falls back gracefully.
