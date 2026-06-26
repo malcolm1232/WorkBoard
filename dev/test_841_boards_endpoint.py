@@ -39,7 +39,9 @@ def make_handler(board_dir, port, cap):
 
 
 def test():
-    assigns = {"/x/AAA/board": 7891, "/x/BBB/board": 7893, "/x/CCC/board": 7892}
+    # GONE board is included in assignments but has no board.json
+    assigns = {"/x/AAA/board": 7891, "/x/BBB/board": 7893,
+               "/x/CCC/board": 7892, "/x/GONE/board": 7894}
     reg = {"/x/AAA/board": {"port": 7891, "pid": 111},
            "/x/CCC/board": {"port": 7892, "pid": 222}}  # BBB not running
 
@@ -48,12 +50,17 @@ def test():
                 "/x/BBB/board": "QuantifyMe — Work Board",
                 "/x/CCC/board": None}.get(str(path))
 
+    _present = {"/x/AAA/board", "/x/BBB/board", "/x/CCC/board"}  # GONE absent
+    def fake_present(path):
+        return str(path) in _present
+
     cap = _Cap()
     h = make_handler(Path("/x/AAA/board"), 7891, cap)
     with mock.patch.object(pr, "assignments", lambda: assigns), \
          mock.patch.object(pr, "read", lambda: reg), \
          mock.patch.object(pr, "_pid_alive", lambda pid: True), \
-         mock.patch.object(serve, "_board_title_for", fake_title):
+         mock.patch.object(serve, "_board_title_for", fake_title), \
+         mock.patch.object(serve, "_board_present", fake_present):
         h._handle_boards()
 
     check(cap.status == 200, "responds 200")
@@ -66,6 +73,7 @@ def test():
     check(by_port[7893]["running"] is False, "BBB not running (absent from registry)")
     check(by_port[7891]["title"] == "WorkBoard", "raw title passed through (norm is client-side)")
     check(by_port[7892]["title"] is None, "missing title → None")
+    check(7894 not in by_port, "GONE board (no board.json) omitted from /boards")
 
 
 if __name__ == "__main__":

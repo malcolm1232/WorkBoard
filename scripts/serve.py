@@ -239,6 +239,15 @@ def _board_title_for(board_dir) -> str | None:
         return None
 
 
+def _board_present(board_dir) -> bool:
+    """True if this board's board.json exists and is readable — the omit signal
+    for /boards (#841). A present board with a blank title is still listed."""
+    try:
+        return (Path(board_dir) / "board.json").is_file()
+    except Exception:
+        return False
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     board_dir: Path = None  # set by main()
     auth_token: str | None = None  # set by main() — #116 LAN-AUTH; None = open
@@ -649,6 +658,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             reg = {}
         boards = []
         for path, port in assigns.items():
+            if not _board_present(path):
+                continue
             entry = reg.get(path) or {}
             pid = entry.get("pid")
             running = False
