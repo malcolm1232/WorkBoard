@@ -248,6 +248,41 @@ def _board_present(board_dir) -> bool:
         return False
 
 
+def _port_healthy(port: int, timeout: float = 0.4) -> bool:
+    """True if a board server answers /health on this port."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/health", timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _spawn_board(board_dir, port: int) -> bool:
+    """Spawn a board server for board_dir on `port`, detached, then poll /health
+    until up (~5s). Returns True once healthy. Uses the SAME launch pattern as
+    hook_session_start.sh / bootstrap_project.sh so behavior is identical."""
+    proj_root = str(Path(board_dir).resolve().parent)  # board_dir is <root>/board
+    serve_py = str(Path(__file__).resolve())
+    log = str(Path(proj_root) / ".board-server.log")
+    env = dict(os.environ); env.pop("CLAUDECODE", None)
+    try:
+        with open(log, "ab") as lf:
+            subprocess.Popen(
+                [sys.executable, serve_py, "--project", proj_root,
+                 "--port", str(port)],
+                stdout=lf, stderr=lf, stdin=subprocess.DEVNULL,
+                start_new_session=True, env=env)
+    except Exception:
+        return False
+    for _ in range(25):          # ~5s at 0.2s
+        if _port_healthy(port):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     board_dir: Path = None  # set by main()
     auth_token: str | None = None  # set by main() — #116 LAN-AUTH; None = open
@@ -692,10 +727,37 @@ class BoardHandler(BaseHTTPRequestHandler):
             return
         self._send(404, b'{"error":"not found"}')
 
+    def _handle_ensure_board(self):
+        """POST /ensure-board?path=<board_dir> — #841. Ensure that project's
+        server is up (spawn if down) and return its url. Only spawns paths the
+        registry already knows (no arbitrary process spawn)."""
+        import port_registry as _pr
+        qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        target = (qs.get("path") or [""])[0]
+        try:
+            assigns = _pr.assignments() or {}
+        except Exception:
+            assigns = {}
+        if not target or target not in assigns:
+            self._send(400, b'{"error":"unknown board path"}')
+            return
+        port = assigns[target]
+        if not _port_healthy(port):
+            if not _spawn_board(target, port):
+                self._send(504, b'{"error":"could not start board"}')
+                return
+        self._send(200, json.dumps({
+            "port": port,
+            "url": f"http://127.0.0.1:{port}",
+        }).encode())
+
     def do_POST(self):
         if not self._gate():
             return
         path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/ensure-board":
+            self._handle_ensure_board()
+            return
         # #318 — extraction progress relay. Inline (card.py progress) and haiku
         # (hourly_emit) POST {done,total,label} here; we just rebroadcast it as an
         # SSE event for the BOARD-LOAD HUD. No board write, small payload only.
