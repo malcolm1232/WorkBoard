@@ -42,8 +42,6 @@ def test():
     # GONE board is included in assignments but has no board.json
     assigns = {"/x/AAA/board": 7891, "/x/BBB/board": 7893,
                "/x/CCC/board": 7892, "/x/GONE/board": 7894}
-    reg = {"/x/AAA/board": {"port": 7891, "pid": 111},
-           "/x/CCC/board": {"port": 7892, "pid": 222}}  # BBB not running
 
     def fake_title(path):
         return {"/x/AAA/board": "WorkBoard",
@@ -54,11 +52,14 @@ def test():
     def fake_present(path):
         return str(path) in _present
 
+    _healthy_ports = {7891, 7892}  # AAA + CCC up; BBB (7893) down
+    def fake_port_healthy(port, timeout=0.4):
+        return port in _healthy_ports
+
     cap = _Cap()
     h = make_handler(Path("/x/AAA/board"), 7891, cap)
     with mock.patch.object(pr, "assignments", lambda: assigns), \
-         mock.patch.object(pr, "read", lambda: reg), \
-         mock.patch.object(pr, "_pid_alive", lambda pid: True), \
+         mock.patch.object(serve, "_port_healthy", fake_port_healthy), \
          mock.patch.object(serve, "_board_title_for", fake_title), \
          mock.patch.object(serve, "_board_present", fake_present):
         h._handle_boards()

@@ -687,27 +687,15 @@ class BoardHandler(BaseHTTPRequestHandler):
             assigns = _pr.assignments() or {}
         except Exception:
             assigns = {}
-        try:
-            reg = _pr.read() or {}
-        except Exception:
-            reg = {}
         boards = []
         for path, port in assigns.items():
             if not _board_present(path):
                 continue
-            entry = reg.get(path) or {}
-            pid = entry.get("pid")
-            running = False
-            if pid:
-                try:
-                    running = _pr._pid_alive(int(pid))
-                except Exception:
-                    running = False
             boards.append({
                 "path": path,
                 "port": port,
                 "title": _board_title_for(path),
-                "running": running,
+                "running": _port_healthy(port),
             })
         boards.sort(key=lambda b: b["port"])
         self._send(200, json.dumps({
