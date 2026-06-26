@@ -234,7 +234,7 @@ def _board_title_for(board_dir) -> str | None:
     try:
         data = json.loads((Path(board_dir) / "board.json").read_text())
         t = data.get("title")
-        return t if isinstance(t, str) and t.strip() else None
+        return t if isinstance(t, str) else None
     except Exception:
         return None
 
@@ -1080,7 +1080,6 @@ def _run_server(board_dir, args):
     """Configure the handler, register our port, and serve until interrupted."""
     BoardHandler.board_dir = board_dir
     BoardHandler.auth_token = args.auth_token or None
-    BoardHandler.port = args.port
     _load_initial_cache(board_dir)
     # Resolve THIS board's designated port (#374). Idempotent + sticky: the
     # board keeps the same port across restarts, and a second project whose
@@ -1094,6 +1093,7 @@ def _run_server(board_dir, args):
         if args.port is None:  # registry unavailable + no explicit port → safe default
             args.port = 7891
         print(f"warn: port assign failed, using {args.port}: {e}", file=sys.stderr)
+    BoardHandler.port = args.port
     # Singleton guard (#377): if a live server is ALREADY serving THIS board on
     # its designated port, don't start a second one — exit cleanly. Keeps "one
     # server per project" true even when both launchd and a session hook race to

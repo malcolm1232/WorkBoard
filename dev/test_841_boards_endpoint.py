@@ -5,7 +5,7 @@ by port, plus current_port. Read-only — must not mutate board.json.
 Run: python3 dev/test_841_boards_endpoint.py  → exit 0 = green, 1 = a fail.
 """
 from __future__ import annotations
-import json, sys, importlib
+import json, sys
 from pathlib import Path
 from unittest import mock
 
@@ -76,7 +76,46 @@ def test():
     check(7894 not in by_port, "GONE board (no board.json) omitted from /boards")
 
 
+def test_real_helpers():
+    import tempfile, json as _json
+    with tempfile.TemporaryDirectory() as tmp:
+        from pathlib import Path as _P
+        d = _P(tmp)
+
+        # _board_present: dir with board.json → True
+        (d / "board.json").write_text("{}")
+        check(serve._board_present(d) is True, "real _board_present: dir with board.json → True")
+
+        # _board_present: dir without board.json → False
+        d2 = _P(tmp) / "empty"
+        d2.mkdir()
+        check(serve._board_present(d2) is False, "real _board_present: dir without board.json → False")
+
+        # _board_title_for: title "Foo" → "Foo"
+        d3 = _P(tmp) / "titled"
+        d3.mkdir()
+        (d3 / "board.json").write_text(_json.dumps({"title": "Foo"}))
+        check(serve._board_title_for(d3) == "Foo", 'real _board_title_for: "title":"Foo" → "Foo"')
+
+        # _board_title_for: blank title → "" (raw, not None)
+        d4 = _P(tmp) / "blank"
+        d4.mkdir()
+        (d4 / "board.json").write_text(_json.dumps({"title": ""}))
+        check(serve._board_title_for(d4) == "", 'real _board_title_for: "title":"" → "" (raw, not None)')
+
+        # _board_title_for: no title key → None
+        d5 = _P(tmp) / "notitle"
+        d5.mkdir()
+        (d5 / "board.json").write_text(_json.dumps({}))
+        check(serve._board_title_for(d5) is None, "real _board_title_for: no title key → None")
+
+        # _board_title_for: missing dir → None
+        check(serve._board_title_for(_P(tmp) / "nonexistent") is None,
+              "real _board_title_for: missing dir → None")
+
+
 if __name__ == "__main__":
     test()
+    test_real_helpers()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)
