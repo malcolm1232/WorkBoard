@@ -3504,6 +3504,11 @@ document.addEventListener('keydown', e => {
 let _undoStack = [];
 let _redoStack = [];
 const _UNDO_CAP = 80;
+// #850 — ordering layer so one ⌘Z undoes the most-recent action whether it was a
+// BOARD edit ('b') or a TAB-VIEW change ('t', order/hidden). Tokens are pushed in
+// action order; undo()/redo() consult the tail to pick which subsystem to revert.
+let _zlog = [], _zlogRedo = [];
+const _Z_CAP = 400;
 
 function _snapState() {
   if (!state) return null;
@@ -3539,6 +3544,10 @@ function pushUndo() {
   _undoStack.push(s);
   if (_undoStack.length > _UNDO_CAP) _undoStack.shift();
   _redoStack.length = 0;
+  // #850 — record a board action in the shared timeline (only on a real push, so
+  // a focus-with-no-edit that de-duped above adds no token).
+  _zlog.push('b'); _zlogRedo.length = 0;
+  if (_zlog.length > _Z_CAP) _zlog.shift();
 }
 // #610 — the undo/redo "Board changed in another session — may overwrite their
 // work. Proceed?" window.confirm was REMOVED: it probed /rev and fired on ANY rev
@@ -3549,7 +3558,15 @@ function pushUndo() {
 // bearing — auto-accept to kill the popup. (Dropping it also removes a per-undo
 // /rev fetch.)
 async function undo() {
+  // #850 — if the most-recent action was a tab-view change, revert that first.
+  if (_zlog.length && _zlog[_zlog.length - 1] === 't' && _tabViewUndo.length) {
+    _zlog.pop(); _zlogRedo.push('t');
+    _tabViewRedo.push(_tabViewSnap());
+    _restoreTabView(_tabViewUndo.pop());
+    toast('Undo'); return;
+  }
   if (!_undoStack.length) { toast('Nothing to undo'); return; }
+  if (_zlog.length && _zlog[_zlog.length - 1] === 'b') { _zlog.pop(); _zlogRedo.push('b'); }
   // Blur any focused editor so its post-edit state isn't re-committed onto
   // the restored snapshot.
   if (document.activeElement && document.activeElement.blur) {
@@ -3587,7 +3604,15 @@ function _tagRestoreMoves(snap, via) {
   } catch (_) { return snap; }
 }
 async function redo() {
+  // #850 — mirror undo: re-apply a tab-view change if it's next in the timeline.
+  if (_zlogRedo.length && _zlogRedo[_zlogRedo.length - 1] === 't' && _tabViewRedo.length) {
+    _zlogRedo.pop(); _zlog.push('t');
+    _tabViewUndo.push(_tabViewSnap());
+    _restoreTabView(_tabViewRedo.pop());
+    toast('Redo'); return;
+  }
   if (!_redoStack.length) { toast('Nothing to redo'); return; }
+  if (_zlogRedo.length && _zlogRedo[_zlogRedo.length - 1] === 'b') { _zlogRedo.pop(); _zlog.push('b'); }
   if (document.activeElement && document.activeElement.blur) {
     try { document.activeElement.blur(); } catch (_) {}
   }
@@ -4748,7 +4773,13 @@ async function loadProjectTabs() {
     if (!r.ok) return;
     data = await r.json();
   } catch (_) { return; }
-  const boards = _applyProjOrder((data && data.boards) || []);   // #849 user drag order
+  let boards = (data && data.boards) || [];
+  // #852 — filter out user-hidden tabs, but NEVER hide the board on screen.
+  const activeBoard = boards.find(b => b.port === activePort);
+  const activePath = activeBoard ? activeBoard.path : null;
+  const hidden = _loadProjHidden();
+  boards = boards.filter(b => b.path === activePath || !hidden.includes(b.path));
+  boards = _applyProjOrder(boards);                              // #849 user drag order
   if (boards.length < 2) { nav.style.display = 'none'; return; }  // nothing to switch to
   nav.innerHTML = '';
   const scroll = document.createElement('div');
@@ -4760,18 +4791,19 @@ async function loadProjectTabs() {
     // in-place swap that would wrongly keep the home tab lit).
     btn.className = 'proj-tab' + (b.port === activePort ? ' active' : '');
     btn.textContent = cleanProjectTitle(b.title) || ('Board ' + b.port);
-    btn.title = b.path + (b.running ? '' : ' (stopped — click to start)') + ' · drag to reorder';
+    btn.title = b.path + (b.running ? '' : ' (stopped — click to start)') + ' · drag to reorder · right-click to hide';
     btn._board = b;   // #848 — overflow menu items reuse this to call switchProject
     if (b.port !== activePort) {
       btn.addEventListener('click', () => { if (_tabDidDrag) return; switchProject(btn, b); });
     }
-    // #849 — native drag-reorder. Persists a per-browser tab order (localStorage).
+    // #849/#851 — native drag-reorder with live displacement (FLIP). Persists a
+    // per-browser tab order. #852 — right-click to hide the tab (UI only).
     btn.draggable = true;
-    btn.addEventListener('dragstart', (e) => onTabDragStart(e, btn));
-    btn.addEventListener('dragover',  (e) => onTabDragOver(e, btn));
-    btn.addEventListener('dragleave', ()  => btn.classList.remove('drop-before', 'drop-after'));
-    btn.addEventListener('drop',      (e) => onTabDrop(e, btn));
-    btn.addEventListener('dragend',   ()  => onTabDragEnd());
+    btn.addEventListener('dragstart',   (e) => onTabDragStart(e, btn));
+    btn.addEventListener('dragover',    (e) => onTabDragOver(e, btn));
+    btn.addEventListener('drop',        (e) => onTabDrop(e, btn));
+    btn.addEventListener('dragend',     ()  => onTabDragEnd());
+    btn.addEventListener('contextmenu', (e) => { e.preventDefault(); deleteTabPrompt(btn); });
     scroll.appendChild(btn);
   }
   nav.appendChild(scroll);
@@ -4804,16 +4836,14 @@ async function loadProjectTabs() {
 // #848 — caret SVG (no emoji; crisp, themes via currentColor).
 const _OVF_CARET = '<svg class="ovf-caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
 
-// #849 — per-browser tab order, persisted in localStorage and applied on render.
-// Keyed by board PATH (stable across port reassignment). It's a VIEW preference,
-// not board data — never written to any board.json, so it can't affect another
-// session's cards.
-function _loadProjOrder() {
-  try { return JSON.parse(localStorage.getItem('wb:proj-order') || '[]'); } catch (_) { return []; }
-}
-function _saveProjOrder(arr) {
-  try { localStorage.setItem('wb:proj-order', JSON.stringify(arr)); } catch (_) {}
-}
+// #849/#852 — per-browser tab VIEW state (order + hidden), persisted in
+// localStorage and keyed by board PATH (stable across port reassignment). This is
+// a pure view preference — NEVER written to any board.json — so it can't touch
+// another session's cards. #850 makes both reorder and hide undoable via ⌘/Ctrl+Z.
+function _loadProjOrder()  { try { return JSON.parse(localStorage.getItem('wb:proj-order')  || '[]'); } catch (_) { return []; } }
+function _saveProjOrder(a) { try { localStorage.setItem('wb:proj-order',  JSON.stringify(a)); } catch (_) {} }
+function _loadProjHidden() { try { return JSON.parse(localStorage.getItem('wb:proj-hidden') || '[]'); } catch (_) { return []; } }
+function _saveProjHidden(a){ try { localStorage.setItem('wb:proj-hidden', JSON.stringify(a)); } catch (_) {} }
 // Sort boards by the saved order (by path); boards not in the saved order keep the
 // server's order (by port), appended after the known ones.
 function _applyProjOrder(boards) {
@@ -4823,44 +4853,113 @@ function _applyProjOrder(boards) {
   return boards.slice().sort((a, b) => (rank(a.path) - rank(b.path)) || (a.port - b.port));
 }
 
-let _tabDragPath = null;     // path of the tab being dragged
+// ── #850 tab-view undo: a thin ordering layer (_zlog) interleaves tab-view and
+// board undos so one ⌘Z undoes the most-recent action of EITHER kind, without
+// touching the board undo internals. Tab order/hidden live outside board `state`,
+// so they need their own snapshot stack. ──────────────────────────────────────
+let _tabViewUndo = [], _tabViewRedo = [];
+function _tabViewSnap() { return JSON.stringify({ order: _loadProjOrder(), hidden: _loadProjHidden() }); }
+function _restoreTabView(snap) {
+  try { const o = JSON.parse(snap); _saveProjOrder(o.order || []); _saveProjHidden(o.hidden || []); } catch (_) {}
+  loadProjectTabs();
+}
+// Call BEFORE mutating tab order/hidden — snapshots the pre-change view state.
+function pushTabViewUndo() {
+  _tabViewUndo.push(_tabViewSnap());
+  if (_tabViewUndo.length > _UNDO_CAP) _tabViewUndo.shift();
+  _tabViewRedo.length = 0;
+  _zlog.push('t'); _zlogRedo.length = 0;
+  if (_zlog.length > _Z_CAP) _zlog.shift();
+}
+
+let _tabDragEl = null;       // the tab element being dragged (for live displacement)
+let _tabDragPath = null;     // its board path
 let _tabDidDrag = false;     // suppress the click that can fire right after a native drag
+let _tabDropped = false;     // distinguish a committed drop from a cancelled drag
+let _tabDragPrevOrder = null;// visible order at dragstart (to skip no-op drops)
+
+// FLIP helpers (mirror captureColumnRects/flipPlayColumns; tabs only move on X).
+function captureTabRects() {
+  const m = new Map();
+  document.querySelectorAll('#project-tabs .proj-tab').forEach(t => { if (t._board) m.set(t._board.path, t.getBoundingClientRect()); });
+  return m;
+}
+function _flipTabs(oldRects, dur = 200) {
+  if (!oldRects) return;
+  document.querySelectorAll('#project-tabs .proj-tab').forEach(t => {
+    if (!t._board) return;
+    const oldR = oldRects.get(t._board.path); if (!oldR) return;
+    const dx = oldR.left - t.getBoundingClientRect().left;
+    if (Math.abs(dx) < 1) return;
+    t.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }],
+              { duration: dur, easing: 'cubic-bezier(0.34, 1.4, 0.64, 1)' });
+  });
+}
+
 function onTabDragStart(e, btn) {
-  _tabDragPath = btn._board.path;
-  _tabDidDrag = true;
+  _tabDragEl = btn; _tabDragPath = btn._board.path; _tabDidDrag = true; _tabDropped = false;
+  const scroll = btn.parentElement;
+  _tabDragPrevOrder = scroll ? Array.from(scroll.querySelectorAll('.proj-tab')).map(t => t._board.path) : null;
   try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', _tabDragPath); } catch (_) {}
   btn.classList.add('dragging');
   closeOverflowMenu();
 }
+// #851 — live displacement: as you drag over a tab, the dragged tab is moved into
+// place in the DOM and the displaced tabs FLIP-glide to make room (same feel as
+// dragging a column), instead of a static drop line.
 function onTabDragOver(e, btn) {
-  if (_tabDragPath == null || btn._board.path === _tabDragPath) return;
-  e.preventDefault();                       // allow drop
+  if (_tabDragPath == null || !_tabDragEl || btn === _tabDragEl) return;
+  e.preventDefault();
   try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
   const r = btn.getBoundingClientRect();
   const before = e.clientX < r.left + r.width / 2;
-  btn.classList.toggle('drop-before', before);
-  btn.classList.toggle('drop-after', !before);
+  if (before && _tabDragEl.nextElementSibling === btn) return;      // already in that slot
+  if (!before && _tabDragEl.previousElementSibling === btn) return;
+  const old = captureTabRects();
+  btn.parentElement.insertBefore(_tabDragEl, before ? btn : btn.nextElementSibling);
+  _flipTabs(old);
 }
 function onTabDrop(e, btn) {
   e.preventDefault();
-  const before = btn.classList.contains('drop-before');
-  btn.classList.remove('drop-before', 'drop-after');
-  if (_tabDragPath == null || btn._board.path === _tabDragPath) return;
-  const scroll = btn.closest('.proj-tabs-scroll');
-  const order = Array.from(scroll.querySelectorAll('.proj-tab')).map(t => t._board.path);
-  const from = order.indexOf(_tabDragPath);
-  if (from < 0) return;
-  order.splice(from, 1);
-  const ti = order.indexOf(btn._board.path);
-  order.splice(before ? ti : ti + 1, 0, _tabDragPath);
-  _saveProjOrder(order);
-  loadProjectTabs();          // re-render in the new order (active stays active)
+  if (_tabDragPath == null) return;
+  const scroll = (_tabDragEl && _tabDragEl.parentElement) ||
+                 document.querySelector('#project-tabs .proj-tabs-scroll');
+  if (!scroll) return;
+  const newOrder = Array.from(scroll.querySelectorAll('.proj-tab')).map(t => t._board.path);
+  _tabDropped = true;
+  // No-op drop (dropped back where it started) → don't pollute the undo timeline.
+  if (_tabDragPrevOrder && JSON.stringify(newOrder) === JSON.stringify(_tabDragPrevOrder)) return;
+  pushTabViewUndo();          // snapshot the pre-drop order so ⌘Z reverts it
+  _saveProjOrder(newOrder);
+  reflowProjectTabs();        // recompute overflow on the live (already-ordered) DOM
 }
 function onTabDragEnd() {
-  document.querySelectorAll('.proj-tab.dragging, .proj-tab.drop-before, .proj-tab.drop-after')
-    .forEach(t => t.classList.remove('dragging', 'drop-before', 'drop-after'));
-  _tabDragPath = null;
+  // Cancelled mid-drag (Esc / dropped on nothing) → revert the live preview.
+  if (!_tabDropped && _tabDragPath != null) loadProjectTabs();
+  document.querySelectorAll('#project-tabs .proj-tab.dragging').forEach(t => t.classList.remove('dragging'));
+  _tabDragEl = null; _tabDragPath = null;
   setTimeout(() => { _tabDidDrag = false; }, 60);   // let the suppressed click pass first
+}
+
+// #852 — right-click a tab → confirm → HIDE it from this browser (UI only). Never
+// touches the backend/board.json; undoable with ⌘Z, or ask Claude to restore.
+async function deleteTabPrompt(btn) {
+  const b = btn._board;
+  if (!b) return;
+  if (b.port === activePort) { toast("Can't hide the board you're viewing — switch to another first"); return; }
+  const visibleNow = document.querySelectorAll('#project-tabs .proj-tab').length;
+  if (visibleNow - 1 < 2) { toast('Keep at least 2 boards on the bar'); return; }
+  const ok = await miniConfirm('Delete this tab?', {
+    sub: 'Hides it from this browser only — the board and all its data stay safe. Undo with ⌘Z, or ask Claude to restore.',
+    okText: 'Delete', okClass: 'danger',
+  });
+  if (!ok) return;
+  pushTabViewUndo();
+  const hidden = _loadProjHidden();
+  if (!hidden.includes(b.path)) hidden.push(b.path);
+  _saveProjHidden(hidden);
+  loadProjectTabs();
+  toast('Tab hidden — ⌘Z to undo');
 }
 
 // Decide which tabs fit; collapse the rest into the "+N Boards" chip. The ACTIVE
