@@ -666,8 +666,17 @@ class BoardHandler(BaseHTTPRequestHandler):
         self._send(200, json.dumps({"ok": True}).encode())
 
     def _handle_health(self):
-        """GET /health — liveness + board rev/cards + SSE client count +
-        current git commit (#177, best-effort)."""
+        """GET /health — liveness probe, EXEMPT from the auth gate (#842).
+
+        The UNAUTHENTICATED payload is deliberately minimal — ok/rev/cards plus the
+        SSE viewer signals — which is all the cross-board probes (_port_healthy, the
+        #377 singleton guard) and board_autoopen's tab-presence check need. The
+        sensitive fields (project/board absolute paths + git commit SHA/subject,
+        #177) are added ONLY for an AUTHENTICATED caller, so a token-protected board
+        (#116 LAN-AUTH) doesn't leak filesystem paths or commit info to unauthed LAN
+        clients (code-review finding). No-token boards authenticate trivially
+        (_check_auth → True), so the browser/Logs HUD is unaffected; gating also
+        skips the git subprocesses on the frequent unauth probes."""
         try:
             state = json.loads((self.board_dir / "board.json").read_text())
             rev = state.get("rev", 0)
@@ -677,32 +686,8 @@ class BoardHandler(BaseHTTPRequestHandler):
         with _clients_lock:
             n_clients = len(_clients)
             last_sse_connect_ms = _last_sse_connect_ms
-        # #177 — include current git commit (short SHA + first line of
-        # message) so the Logs HUD can show "running fde639b" without a
-        # separate round-trip. Best-effort; silent fail if not a repo.
-        commit_sha, commit_msg = "", ""
-        try:
-            # Walk up from board_dir looking for a .git
-            cur = self.board_dir.resolve()
-            for _ in range(6):
-                if (cur / ".git").exists():
-                    commit_sha = subprocess.check_output(
-                        ["git", "-C", str(cur), "rev-parse", "--short", "HEAD"],
-                        stderr=subprocess.DEVNULL, timeout=1
-                    ).decode().strip()
-                    commit_msg = subprocess.check_output(
-                        ["git", "-C", str(cur), "log", "-1", "--pretty=%s"],
-                        stderr=subprocess.DEVNULL, timeout=1
-                    ).decode().strip()
-                    break
-                if cur.parent == cur: break
-                cur = cur.parent
-        except Exception:
-            pass
-        body = json.dumps({
+        payload = {
             "ok": True,
-            "project": str(self.board_dir.parent),
-            "board": str(self.board_dir),
             "rev": rev,
             "cards": cards,
             "sseClients": n_clients,
@@ -711,11 +696,35 @@ class BoardHandler(BaseHTTPRequestHandler):
             # which survives the brief SSE flaps that used to spawn duplicate tabs.
             "lastSseConnectMs": last_sse_connect_ms,
             "nowMs": int(time.time() * 1000),
-            "commit": commit_sha,
-            "commitMsg": commit_msg,
             "ts": datetime.now(timezone.utc).isoformat(),
-        }).encode()
-        self._send(200, body)
+        }
+        # Sensitive fields only for authenticated callers (#842 follow-up).
+        if self._check_auth()[0]:
+            # #177 — current git commit (short SHA + first line) so the Logs HUD can
+            # show "running fde639b" without a separate round-trip. Best-effort.
+            commit_sha, commit_msg = "", ""
+            try:
+                cur = self.board_dir.resolve()           # walk up to a .git
+                for _ in range(6):
+                    if (cur / ".git").exists():
+                        commit_sha = subprocess.check_output(
+                            ["git", "-C", str(cur), "rev-parse", "--short", "HEAD"],
+                            stderr=subprocess.DEVNULL, timeout=1
+                        ).decode().strip()
+                        commit_msg = subprocess.check_output(
+                            ["git", "-C", str(cur), "log", "-1", "--pretty=%s"],
+                            stderr=subprocess.DEVNULL, timeout=1
+                        ).decode().strip()
+                        break
+                    if cur.parent == cur: break
+                    cur = cur.parent
+            except Exception:
+                pass
+            payload["project"] = str(self.board_dir.parent)
+            payload["board"] = str(self.board_dir)
+            payload["commit"] = commit_sha
+            payload["commitMsg"] = commit_msg
+        self._send(200, json.dumps(payload).encode())
 
     def _handle_boards(self):
         """GET /boards — #841 project switcher. Lists every known project from
