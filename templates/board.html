@@ -223,6 +223,54 @@
     background:var(--ink, #3b82f6); color:#fff; border-color:transparent; cursor:default;
   }
   .project-tabs .proj-tab.starting { opacity:.6; cursor:progress; }
+  /* #848 — overflow: nav shrinks (min-width:0) so when the window is narrow the
+     tab strip is squeezed; tabs that don't fit collapse into a grey "+N Boards"
+     chip. The CLIPPED part is only the inner .proj-tabs-scroll — the chip + its
+     dropdown live in a sibling wrapper so the menu is never clipped. */
+  .project-tabs { min-width: 0; }
+  .project-tabs .proj-tabs-scroll {
+    display: flex; gap: 6px; align-items: center;
+    min-width: 0; flex: 0 1 auto; overflow: hidden;
+  }
+  .project-tabs .proj-tab { flex: 0 0 auto; }   /* intrinsic width — clip, don't squeeze */
+  .proj-ovf-wrap { position: relative; flex: 0 0 auto; display: none; }
+  .proj-overflow {
+    font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: rgba(122,111,102,.08);   /* quiet grey — subordinate to real tabs */
+    color: var(--muted); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .proj-overflow:hover { color: var(--ink); border-color: var(--accent); }
+  .proj-overflow[aria-expanded="true"] {
+    color: var(--ink); border-color: var(--accent); background: rgba(217,119,87,.10);
+  }
+  .proj-overflow .ovf-caret { width: 9px; height: 9px; transition: transform .15s; }
+  .proj-overflow[aria-expanded="true"] .ovf-caret { transform: rotate(180deg); }
+  .proj-ovf-menu {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 210;
+    min-width: 180px; max-height: min(60vh, 360px); overflow-y: auto;
+    background: var(--card-bg); color: var(--ink);
+    border: 1px solid var(--card-border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(44,38,32,.18), 0 2px 6px rgba(44,38,32,.06);
+    padding: 5px; display: none;
+    animation: proj-ovf-pop 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .proj-ovf-menu.open { display: block; }
+  .proj-ovf-item {
+    display: block; width: 100%; text-align: left; font: inherit; font-size: 12px;
+    padding: 7px 10px; border: 0; border-radius: 7px; background: transparent;
+    color: var(--ink); cursor: pointer; white-space: nowrap;
+    transition: background .1s;
+  }
+  .proj-ovf-item:hover, .proj-ovf-item:focus { background: rgba(217,119,87,.10); outline: none; }
+  @keyframes proj-ovf-pop {
+    from { opacity: 0; transform: translateY(-6px) scale(.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .proj-ovf-menu { animation: none; } .proj-overflow .ovf-caret { transition: none; } }
 
   /* Tag legend popover — anchored under the Tags button */
   .tag-legend {
@@ -4672,7 +4720,9 @@ function cleanProjectTitle(raw) {
 }
 
 // #841 — project switcher. Fetch the known boards and render a tab per project,
-// top-left. Click → ensure that board's server is up → navigate same-tab.
+// top-left. Click → ensure that board's server is up → swap in place (#846).
+// #848 — tabs live in a clipped .proj-tabs-scroll; a sibling .proj-ovf-wrap holds
+// the "+N Boards" overflow chip + dropdown (outside the clip so the menu shows).
 async function loadProjectTabs() {
   const nav = document.getElementById('project-tabs');
   if (!nav) return;
@@ -4685,6 +4735,8 @@ async function loadProjectTabs() {
   const boards = (data && data.boards) || [];
   if (boards.length < 2) { nav.style.display = 'none'; return; }  // nothing to switch to
   nav.innerHTML = '';
+  const scroll = document.createElement('div');
+  scroll.className = 'proj-tabs-scroll';
   for (const b of boards) {
     const btn = document.createElement('button');
     // #846 — highlight + click-guard derive from activePort (the board ON SCREEN),
@@ -4693,12 +4745,163 @@ async function loadProjectTabs() {
     btn.className = 'proj-tab' + (b.port === activePort ? ' active' : '');
     btn.textContent = cleanProjectTitle(b.title) || ('Board ' + b.port);
     btn.title = b.path + (b.running ? '' : ' (stopped — click to start)');
+    btn._board = b;   // #848 — overflow menu items reuse this to call switchProject
     if (b.port !== activePort) {
       btn.addEventListener('click', () => switchProject(btn, b));
     }
-    nav.appendChild(btn);
+    scroll.appendChild(btn);
   }
+  nav.appendChild(scroll);
+
+  // #848 — the overflow chip + dropdown (hidden until reflow finds hidden tabs).
+  const wrap = document.createElement('div');
+  wrap.className = 'proj-ovf-wrap';
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'proj-overflow';
+  chip.setAttribute('aria-haspopup', 'true');
+  chip.setAttribute('aria-expanded', 'false');
+  chip.addEventListener('click', (e) => { e.stopPropagation(); toggleOverflowMenu(); });
+  const menu = document.createElement('div');
+  menu.className = 'proj-ovf-menu';
+  menu.setAttribute('role', 'menu');
+  wrap.appendChild(chip);
+  wrap.appendChild(menu);
+  nav.appendChild(wrap);
+
   nav.style.display = 'flex';
+  _wireOverflowGlobals();
+  // Measure AFTER layout settles (fonts/flex) so widths are real.
+  requestAnimationFrame(reflowProjectTabs);
+}
+
+// #848 — caret SVG (no emoji; crisp, themes via currentColor).
+const _OVF_CARET = '<svg class="ovf-caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
+
+// Decide which tabs fit; collapse the rest into the "+N Boards" chip. The ACTIVE
+// tab is always kept visible (never hidden into overflow). Idempotent — safe to
+// call on load, after a swap, and on every (debounced) resize.
+function reflowProjectTabs() {
+  const nav = document.getElementById('project-tabs');
+  if (!nav || nav.style.display === 'none') return;
+  const scroll = nav.querySelector('.proj-tabs-scroll');
+  const wrap = nav.querySelector('.proj-ovf-wrap');
+  if (!scroll || !wrap) return;
+  const tabs = Array.from(scroll.querySelectorAll('.proj-tab'));
+  if (!tabs.length) return;
+  // Reset to the all-visible, no-chip baseline to measure natural widths.
+  tabs.forEach(t => { t.style.display = ''; });
+  wrap.style.display = 'none';
+  scroll.style.minWidth = '';   // drop any floor from a previous pass before measuring
+  const GAP = 6;
+  const widths = tabs.map(t => t.getBoundingClientRect().width);
+  const natural = widths.reduce((a, b) => a + b, 0) + GAP * (tabs.length - 1);
+  // Budget against the NAV's box, not scroll.clientWidth: the scroller is
+  // flex-shrinkable, so with the chip hidden it expands to fill the chip's future
+  // space and over-reports the room — which clipped the active tab once the chip
+  // appeared. nav.clientWidth is the stable container budget.
+  const avail = nav.clientWidth;
+  if (natural <= avail + 0.5) { closeOverflowMenu(); return; }   // everything fits
+
+  // Need the chip. Show it to measure its width, then greedily keep tabs from the
+  // left that fit alongside it — but ALWAYS keep the active tab on screen.
+  // Explicit 'inline-flex' (not '') — the CSS default for .proj-ovf-wrap is
+  // display:none, so '' would resolve back to none and the chip would be invisible.
+  wrap.style.display = 'inline-flex';
+  const chipW = wrap.getBoundingClientRect().width + GAP;
+  const activeIdx = tabs.findIndex(t => t.classList.contains('active'));
+  let budget = avail - chipW;
+  if (activeIdx >= 0) budget -= widths[activeIdx] + GAP;
+  const hidden = [];
+  let over = false;
+  for (let i = 0; i < tabs.length; i++) {
+    if (i === activeIdx) { tabs[i].style.display = ''; continue; }
+    const need = widths[i] + GAP;
+    if (!over && budget - need >= 0) { budget -= need; tabs[i].style.display = ''; }
+    else { over = true; tabs[i].style.display = 'none'; hidden.push(tabs[i]); }
+  }
+  // Floor the scroller to its visible tabs so the active tab (and any kept
+  // neighbours) is never clipped to a sliver when the header is extremely tight
+  // (phone widths). The chip may then sit slightly past the nav rather than the
+  // active tab vanishing — the lesser evil, and it stays clickable.
+  const shown = tabs.filter(t => t.style.display !== 'none');
+  const shownW = shown.reduce((s, t) => s + t.getBoundingClientRect().width, 0)
+                 + GAP * Math.max(0, shown.length - 1);
+  scroll.style.minWidth = Math.ceil(shownW) + 'px';
+  buildOverflowMenu(wrap, hidden);
+}
+
+function buildOverflowMenu(wrap, hidden) {
+  const chip = wrap.querySelector('.proj-overflow');
+  const menu = wrap.querySelector('.proj-ovf-menu');
+  const n = hidden.length;
+  if (!n) { closeOverflowMenu(); wrap.style.display = 'none'; return; }
+  chip.innerHTML = '+' + n + ' Board' + (n === 1 ? '' : 's') + _OVF_CARET;
+  chip.setAttribute('aria-label', 'Show ' + n + ' more board' + (n === 1 ? '' : 's'));
+  menu.innerHTML = '';
+  for (const tab of hidden) {
+    const it = document.createElement('button');
+    it.type = 'button';
+    it.className = 'proj-ovf-item';
+    it.setAttribute('role', 'menuitem');
+    it.tabIndex = -1;
+    it.textContent = tab.textContent;
+    it.title = tab.title;
+    it.addEventListener('click', () => { closeOverflowMenu(); switchProject(tab, tab._board); });
+    menu.appendChild(it);
+  }
+}
+
+function toggleOverflowMenu() {
+  const wrap = document.querySelector('#project-tabs .proj-ovf-wrap');
+  if (!wrap || wrap.style.display === 'none') return;
+  const menu = wrap.querySelector('.proj-ovf-menu');
+  const chip = wrap.querySelector('.proj-overflow');
+  const open = !menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+  chip.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { const first = menu.querySelector('.proj-ovf-item'); if (first) first.focus(); }
+}
+
+function closeOverflowMenu(focusChip) {
+  const wrap = document.querySelector('#project-tabs .proj-ovf-wrap');
+  if (!wrap) return;
+  const menu = wrap.querySelector('.proj-ovf-menu');
+  const chip = wrap.querySelector('.proj-overflow');
+  if (menu) menu.classList.remove('open');
+  if (chip) { chip.setAttribute('aria-expanded', 'false'); if (focusChip) chip.focus(); }
+}
+
+// One-time global wiring: click-outside + Escape close the menu; arrow keys move
+// between menu items; a debounced resize re-runs the overflow measurement.
+let _ovfWired = false;
+function _wireOverflowGlobals() {
+  if (_ovfWired) return;
+  _ovfWired = true;
+  document.addEventListener('click', (e) => {
+    const wrap = document.querySelector('#project-tabs .proj-ovf-wrap');
+    if (wrap && !wrap.contains(e.target)) closeOverflowMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    const menu = document.querySelector('#project-tabs .proj-ovf-menu.open');
+    if (!menu) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeOverflowMenu(true); return; }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = Array.from(menu.querySelectorAll('.proj-ovf-item'));
+      if (!items.length) return;
+      const cur = items.indexOf(document.activeElement);
+      const next = e.key === 'ArrowDown'
+        ? (cur + 1) % items.length
+        : (cur - 1 + items.length) % items.length;
+      items[next].focus();
+    }
+  });
+  let _rt = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(_rt);
+    _rt = setTimeout(() => requestAnimationFrame(reflowProjectTabs), 120);
+  });
 }
 
 async function switchProject(btn, b) {
