@@ -513,6 +513,15 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        # #842 — /health is EXEMPT from the auth gate. It exposes only liveness +
+        # rev + card count, and the cross-board probes that drive the switcher
+        # (_port_healthy, /ensure-board) and the #377 singleton guard all hit it
+        # UNAUTHENTICATED. Gating it made a token-protected board (#116 LAN-AUTH)
+        # answer 401 → reported running:false → /boards hid it + /ensure-board 504'd.
+        # Serve it before the gate; default (no-token) boards are unchanged.
+        if path == "/health":
+            self._handle_health()
+            return
         if not self._gate():
             return
 
@@ -534,8 +543,6 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_flash()
         elif path == "/divider":
             self._handle_divider()
-        elif path == "/health":
-            self._handle_health()
         elif path == "/boards":
             self._handle_boards()
         elif path == "/tags":
