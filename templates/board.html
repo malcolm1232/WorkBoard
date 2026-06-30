@@ -1762,6 +1762,25 @@
 // (same origin). No File System Access API, no IndexedDB. Works in any browser.
 const BOARD_URL = '/board.json';
 const REV_URL = '/rev';   // #552 — cheap rev probe so the 3s poll doesn't re-fetch the whole board
+// #846 — in-place board switch. `apiBase` prefixes the board-DATA endpoints
+// (BOARD_URL / REV_URL / /events) so they target the ACTIVE board's origin; '' =
+// same origin (the server this page loaded from). Registry endpoints (/boards,
+// /ensure-board, /health) ALWAYS stay same-origin — every board server serves the
+// same registry, and the home server must stay reachable after a swap. `activePort`
+// is the board currently on screen; the tab highlight derives from it, because the
+// home server's /boards `current_port` only ever names the home port, not the
+// swapped-in one. A `?board=<port>` query makes a refresh stick to the viewed board.
+let apiBase = '';
+let activePort = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
+(function _initApiBaseFromQuery() {
+  try {
+    const want = new URLSearchParams(location.search).get('board');
+    if (want && want !== String(activePort)) {
+      apiBase = 'http://127.0.0.1:' + want;
+      activePort = Number(want);
+    }
+  } catch (_) { /* no URLSearchParams / bad query → stay same-origin */ }
+})();
 let state = null;
 let lastRev = 0;
 let saveTimer = null;
@@ -3328,8 +3347,8 @@ function _absorbState(incoming) {
   if (document.getElementById('tag-legend-list')) refreshTagLegend();
 }
 async function loadFromFile() {
-  const r = await fetch(BOARD_URL, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`GET ${BOARD_URL} → ${r.status}`);
+  const r = await fetch(apiBase + BOARD_URL, { cache: 'no-store' });   // #846 apiBase = active board
+  if (!r.ok) throw new Error(`GET ${apiBase + BOARD_URL} → ${r.status}`);
   _absorbState(await r.json());
   detectChangesAndSnapshot();   // v2: seed snapshot on first load (no flash)
   render();
@@ -3342,7 +3361,7 @@ async function save(by='user') {
   state.savedBy = by;
   lastRev = state.rev;
   try {
-    const r = await fetch(BOARD_URL, {
+    const r = await fetch(apiBase + BOARD_URL, {   // #846 — save to the active board
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state),
@@ -3373,11 +3392,18 @@ function flushSave() {
   state.savedBy = 'user';
   lastRev = state.rev;
   const body = JSON.stringify(state);
-  try {
-    const blob = new Blob([body], { type: 'application/json' });
-    if (navigator.sendBeacon && navigator.sendBeacon(BOARD_URL, blob)) { pendingDirty = false; return; }
-  } catch (_) {}
-  try { fetch(BOARD_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }); pendingDirty = false; } catch (_) {}
+  const url = apiBase + BOARD_URL;   // #846 — flush to the active board
+  // sendBeacon sends an application/json blob as a non-CORS-safelisted request,
+  // which is dropped cross-origin; only use it same-origin. Cross-origin (a
+  // swapped-in board) falls through to fetch keepalive, which the server's CORS
+  // now permits.
+  if (!apiBase) {
+    try {
+      const blob = new Blob([body], { type: 'application/json' });
+      if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) { pendingDirty = false; return; }
+    } catch (_) {}
+  }
+  try { fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }); pendingDirty = false; } catch (_) {}
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
 window.addEventListener('pagehide', flushSave);
@@ -3593,14 +3619,14 @@ function startPoll() {
       _pollTick++;
       if (_pollTick % 20 !== 0) {
         try {
-          const rr = await fetch(REV_URL, { cache: 'no-store' });
+          const rr = await fetch(apiBase + REV_URL, { cache: 'no-store' });   // #846 active board
           if (rr.ok) {
             const j = await rr.json();
             if ((j.rev || 0) === lastRev) return;   // unchanged → skip the 700KB fetch
           }
         } catch (_) { /* /rev down → fall through to the full fetch below */ }
       }
-      const r = await fetch(BOARD_URL, { cache: 'no-store' });
+      const r = await fetch(apiBase + BOARD_URL, { cache: 'no-store' });   // #846 active board
       if (!r.ok) return;
       const incoming = await r.json();
       if ((incoming.rev || 0) !== lastRev) {
@@ -3639,7 +3665,7 @@ document.addEventListener('visibilitychange', () => {
   // live progress banner / HUD) is visible the instant you return — don't wait
   // on the network round-trip.
   render();
-  fetch(BOARD_URL, { cache: 'no-store' })
+  fetch(apiBase + BOARD_URL, { cache: 'no-store' })   // #846 — resync the active board
     .then(r => (r.ok ? r.json() : null))
     .then(incoming => {
       // #353 — render UNCONDITIONALLY, not rev-gated. A throttled background
@@ -4661,10 +4687,13 @@ async function loadProjectTabs() {
   nav.innerHTML = '';
   for (const b of boards) {
     const btn = document.createElement('button');
-    btn.className = 'proj-tab' + (b.port === data.current_port ? ' active' : '');
+    // #846 — highlight + click-guard derive from activePort (the board ON SCREEN),
+    // not data.current_port (the home server only ever names ITSELF, so after an
+    // in-place swap that would wrongly keep the home tab lit).
+    btn.className = 'proj-tab' + (b.port === activePort ? ' active' : '');
     btn.textContent = cleanProjectTitle(b.title) || ('Board ' + b.port);
     btn.title = b.path + (b.running ? '' : ' (stopped — click to start)');
-    if (b.port !== data.current_port) {
+    if (b.port !== activePort) {
       btn.addEventListener('click', () => switchProject(btn, b));
     }
     nav.appendChild(btn);
@@ -4674,20 +4703,53 @@ async function loadProjectTabs() {
 
 async function switchProject(btn, b) {
   if (btn.classList.contains('starting')) return;
+  if (b.port === activePort) return;            // already showing it
   btn.classList.add('starting');
   const prev = btn.textContent;
   btn.textContent = 'starting…';
   try {
+    // Ensure the target server is up (same-origin call to the home server, which
+    // owns the registry), then swap IN PLACE — no navigation, no reload, no flash.
     const r = await fetch('/ensure-board?path=' + encodeURIComponent(b.path),
                           { method: 'POST', credentials: 'same-origin' });
     if (!r.ok) throw new Error('ensure failed');
     const j = await r.json();
-    window.location = j.url;            // same-tab switch
+    await activateBoard(j.port);
   } catch (_) {
+    if (typeof toast === 'function') toast("Couldn't switch board");
+  } finally {
     btn.classList.remove('starting');
     btn.textContent = prev;
-    if (typeof toast === 'function') toast("Couldn't start that board");
   }
+}
+
+// #846 — swap the on-screen board to `port` WITHOUT navigating: repoint board-data
+// I/O at that board's origin, tear down the live stream, load + paint the new board
+// (entrance cascade suppressed so it simply appears rather than re-flying), then
+// reconnect SSE there. This is what replaces the full cross-origin page reload that
+// caused the switch flicker (old → blank → empty board → cards). The address bar
+// keeps a same-origin ?board=<port> so a manual refresh restores the viewed board.
+async function activateBoard(port) {
+  const ownPort = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
+  apiBase = (Number(port) === ownPort) ? '' : ('http://127.0.0.1:' + port);
+  activePort = Number(port);
+  try { _es && _es.close(); } catch (_) {}
+  _es = null; _sseConnected = false;
+  _animSuppressUntil = Date.now() + 1500;   // swapped board appears; no entrance re-fly
+  // #846 — RESET the change-snapshot before loading the new board. Otherwise
+  // detectChangesAndSnapshot() diffs the incoming board's cards against the OLD
+  // board's snapshot, finds every id "new", and green-flashes ALL of them (the
+  // one-pulse-green-everything bug). Clearing makes the next call re-SEED silently,
+  // exactly like a first load.
+  _prevSnapshot = new Map();
+  _flashIds = new Set();
+  setStatus('switching…', 'unsynced');
+  await loadFromFile();        // GET apiBase + /board.json → render the new board
+  startSSE();                  // reconnect the live stream to apiBase + /events
+  loadProjectTabs();           // recompute the active-tab highlight from activePort
+  try {
+    history.replaceState(null, '', apiBase ? ('?board=' + activePort) : location.pathname);
+  } catch (_) { /* replaceState blocked → URL just stays put; swap still worked */ }
 }
 
 // Read project name from board.json `title` field. Falls back gracefully.
@@ -7052,7 +7114,7 @@ function handleRevBumped({ rev, savedBy, savedAt, activeWork }) {
 function startSSE() {
   if (!window.EventSource) return;             // very old browser — polling will cover it
   try { _es && _es.close(); } catch (_) {}
-  _es = new EventSource('/events');
+  _es = new EventSource(apiBase + '/events');   // #846 — stream from the active board
   _es.addEventListener('open', () => {
     _sseConnected = true;
     setStatus('live');

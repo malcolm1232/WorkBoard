@@ -341,12 +341,25 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return
         sys.stderr.write(f"[{self.log_date_time_string()}] {fmt % args}\n")
 
+    @staticmethod
+    def _cors_origin(origin: str) -> str:
+        """#846 — reflect a LOCAL board origin (127.0.0.1/localhost:<port>) so a
+        board page on one port can read a sibling board on another for the in-place
+        switch (no page reload → no flicker). Any non-local origin → "null" (the
+        previous locked behaviour). Localhost-only, so this widens reads to other
+        local board servers and nothing else."""
+        if origin and re.match(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", origin):
+            return origin
+        return "null"
+
     def _send(self, status: int, body: bytes, ctype: str = "application/json", extra: dict | None = None):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "null")
+        self.send_header("Access-Control-Allow-Origin",
+                         self._cors_origin(self.headers.get("Origin", "")))
+        self.send_header("Vary", "Origin")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -435,6 +448,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Access-Control-Allow-Origin",   # #846 cross-port EventSource
+                             self._cors_origin(self.headers.get("Origin", "")))
+            self.send_header("Vary", "Origin")
             self.end_headers()
             self.wfile.write(b": connected\n\n")
             self.wfile.flush()
@@ -479,6 +495,21 @@ class BoardHandler(BaseHTTPRequestHandler):
             with _clients_lock:
                 if q in _clients:
                     _clients.remove(q)
+
+    def do_OPTIONS(self):
+        """#846 — CORS preflight for the in-place board switch. A POST /board.json
+        from a sibling board's origin carries Content-Type: application/json (and
+        card.py adds X-Board-Base-Rev), both non-simple, so the browser preflights.
+        No auth gate: preflight requests carry no credentials by spec."""
+        origin = self._cors_origin(self.headers.get("Origin", ""))
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Board-Base-Rev")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
