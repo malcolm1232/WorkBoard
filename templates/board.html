@@ -4801,11 +4801,15 @@ async function loadProjectTabs() {
     btn.draggable = true;
     btn.addEventListener('dragstart',   (e) => onTabDragStart(e, btn));
     btn.addEventListener('dragover',    (e) => onTabDragOver(e, btn));
-    btn.addEventListener('drop',        (e) => onTabDrop(e, btn));
+    btn.addEventListener('drop',        (e) => onTabDrop(e));
     btn.addEventListener('dragend',     ()  => onTabDragEnd());
     btn.addEventListener('contextmenu', (e) => { e.preventDefault(); deleteTabPrompt(btn); });
     scroll.appendChild(btn);
   }
+  // #853 — strip-level safety net: a release in a gap (or on the dragged tab) still
+  // commits, instead of falling through to dragend's revert.
+  scroll.addEventListener('dragover', (e) => { if (_tabDragPath != null) e.preventDefault(); });
+  scroll.addEventListener('drop', onTabDrop);
   nav.appendChild(scroll);
 
   // #848 — the overflow chip + dropdown (hidden until reflow finds hidden tabs).
@@ -4908,9 +4912,14 @@ function onTabDragStart(e, btn) {
 // place in the DOM and the displaced tabs FLIP-glide to make room (same feel as
 // dragging a column), instead of a static drop line.
 function onTabDragOver(e, btn) {
-  if (_tabDragPath == null || !_tabDragEl || btn === _tabDragEl) return;
+  if (_tabDragPath == null || !_tabDragEl) return;
+  // ALWAYS preventDefault so the whole strip — including the dragged tab now under
+  // the cursor after displacement — is a valid drop target. Without this, releasing
+  // on the dragged tab fired no 'drop' → dragend reverted ("can't reposition this
+  // tab", esp. the wide active pill). #853.
   e.preventDefault();
   try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+  if (btn === _tabDragEl) return;   // hovering the dragged tab itself → nothing to reorder
   const r = btn.getBoundingClientRect();
   const before = e.clientX < r.left + r.width / 2;
   if (before && _tabDragEl.nextElementSibling === btn) return;      // already in that slot
@@ -4919,14 +4928,15 @@ function onTabDragOver(e, btn) {
   btn.parentElement.insertBefore(_tabDragEl, before ? btn : btn.nextElementSibling);
   _flipTabs(old);
 }
-function onTabDrop(e, btn) {
+function onTabDrop(e) {
   e.preventDefault();
-  if (_tabDragPath == null) return;
+  e.stopPropagation();        // don't double-fire via tab→container bubbling
+  if (_tabDragPath == null || _tabDropped) return;
+  _tabDropped = true;
   const scroll = (_tabDragEl && _tabDragEl.parentElement) ||
                  document.querySelector('#project-tabs .proj-tabs-scroll');
   if (!scroll) return;
   const newOrder = Array.from(scroll.querySelectorAll('.proj-tab')).map(t => t._board.path);
-  _tabDropped = true;
   // No-op drop (dropped back where it started) → don't pollute the undo timeline.
   if (_tabDragPrevOrder && JSON.stringify(newOrder) === JSON.stringify(_tabDragPrevOrder)) return;
   pushTabViewUndo();          // snapshot the pre-drop order so ⌘Z reverts it
