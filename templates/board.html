@@ -211,57 +211,70 @@
   }
   header .seg-pill .seg:hover { background: rgba(217,119,87,.14); }
   header .seg-pill .seg-div { align-self: stretch; width: 1px; background: var(--card-border); }
-  /* #841 — project switcher tab row */
-  .project-tabs { display:flex; gap:6px; align-items:center; margin-right:10px; }
-  .project-tabs .proj-tab {
-    font: inherit; font-size:12px; line-height:1; cursor:pointer;
-    padding:5px 10px; border-radius:999px; border:1px solid var(--card-border, #2a2a2a);
-    background:transparent; color:var(--muted, #9aa0a6); white-space:nowrap;
+  /* #841/#848/#improve — project switcher as a polished SEGMENTED CONTROL,
+     matching the header's view-toggle convention (one inset track; active = ink
+     pill with a soft lift; inactive = quiet muted text that warms on hover).
+     Replaces the floaty grey-outlined pills that read as "cheap". Tabs are also
+     drag-reorderable (#849). The CLIPPED part is only .proj-tabs-scroll — the
+     overflow chip + its dropdown live in a sibling wrap so the menu isn't clipped. */
+  .project-tabs {
+    display: flex; align-items: center; gap: 2px; margin-right: 10px; min-width: 0;
+    padding: 3px; border-radius: 999px;
+    background: rgba(217,119,87,.06);   /* warm trough — same as the view-toggle */
+    border: 1px solid var(--card-border);
   }
-  .project-tabs .proj-tab:hover { color:var(--ink, #e8eaed); }
-  .project-tabs .proj-tab.active {
-    background:var(--ink, #3b82f6); color:#fff; border-color:transparent; cursor:default;
-  }
-  .project-tabs .proj-tab.starting { opacity:.6; cursor:progress; }
-  /* #848 — overflow: nav shrinks (min-width:0) so when the window is narrow the
-     tab strip is squeezed; tabs that don't fit collapse into a grey "+N Boards"
-     chip. The CLIPPED part is only the inner .proj-tabs-scroll — the chip + its
-     dropdown live in a sibling wrapper so the menu is never clipped. */
-  .project-tabs { min-width: 0; }
   .project-tabs .proj-tabs-scroll {
-    display: flex; gap: 6px; align-items: center;
+    display: flex; gap: 2px; align-items: center;
     min-width: 0; flex: 0 1 auto; overflow: hidden;
   }
-  .project-tabs .proj-tab { flex: 0 0 auto; }   /* intrinsic width — clip, don't squeeze */
-  .proj-ovf-wrap { position: relative; flex: 0 0 auto; display: none; }
+  .project-tabs .proj-tab {
+    flex: 0 0 auto;
+    font: inherit; font-size: 12px; font-weight: 500; line-height: 1;
+    cursor: pointer; padding: 5px 11px; border-radius: 999px;
+    border: 0; background: transparent; color: var(--muted); white-space: nowrap;
+    transition: background .14s, color .14s, box-shadow .14s, opacity .14s;
+  }
+  .project-tabs .proj-tab:hover { background: rgba(217,119,87,.10); color: var(--ink); }
+  .project-tabs .proj-tab.active {
+    background: var(--card-bg); color: var(--ink); cursor: default;   /* white raised pill */
+    box-shadow: 0 1px 2px rgba(44,38,32,.12), 0 1px 1px rgba(44,38,32,.06);
+  }
+  .project-tabs .proj-tab.active:hover { background: var(--card-bg); color: var(--ink); }  /* no tint on active */
+  .project-tabs .proj-tab.starting { opacity: .55; cursor: progress; }
+  /* #849 drag-reorder states */
+  .project-tabs .proj-tab.dragging { opacity: .4; cursor: grabbing; }
+  .project-tabs .proj-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+  .project-tabs .proj-tab.drop-after  { box-shadow: inset -2px 0 0 var(--accent); }
+
+  /* #848 overflow chip — a quiet segment INSIDE the track, set off by a hairline
+     so it reads as part of the control rather than a floaty grey pill. */
+  .proj-ovf-wrap { position: relative; flex: 0 0 auto; display: none; align-items: center; }
+  .proj-ovf-div { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--card-border); }
   .proj-overflow {
-    font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
-    padding: 5px 10px; border-radius: 999px;
-    border: 1px solid var(--card-border);
-    background: rgba(122,111,102,.08);   /* quiet grey — subordinate to real tabs */
-    color: var(--muted); white-space: nowrap;
+    font: inherit; font-size: 12px; font-weight: 500; line-height: 1; cursor: pointer;
+    padding: 5px 10px; border-radius: 999px; border: 0;
+    background: transparent; color: var(--muted); white-space: nowrap;
     display: inline-flex; align-items: center; gap: 5px;
-    transition: color .12s, border-color .12s, background .12s;
+    transition: background .14s, color .14s;
   }
-  .proj-overflow:hover { color: var(--ink); border-color: var(--accent); }
-  .proj-overflow[aria-expanded="true"] {
-    color: var(--ink); border-color: var(--accent); background: rgba(217,119,87,.10);
-  }
-  .proj-overflow .ovf-caret { width: 9px; height: 9px; transition: transform .15s; }
-  .proj-overflow[aria-expanded="true"] .ovf-caret { transform: rotate(180deg); }
+  .proj-overflow:hover { background: rgba(217,119,87,.10); color: var(--ink); }
+  .proj-overflow[aria-expanded="true"] { background: rgba(217,119,87,.12); color: var(--ink); }
+  .proj-overflow .ovf-caret { width: 9px; height: 9px; opacity: .7; transition: transform .15s; }
+  .proj-overflow[aria-expanded="true"] .ovf-caret { transform: rotate(180deg); opacity: 1; }
   .proj-ovf-menu {
-    position: absolute; top: calc(100% + 6px); left: 0; z-index: 210;
-    min-width: 180px; max-height: min(60vh, 360px); overflow-y: auto;
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 210;
+    min-width: 190px; max-height: min(60vh, 360px); overflow-y: auto;
     background: var(--card-bg); color: var(--ink);
-    border: 1px solid var(--card-border); border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(44,38,32,.18), 0 2px 6px rgba(44,38,32,.06);
-    padding: 5px; display: none;
+    border: 1px solid var(--card-border); border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(44,38,32,.20), 0 2px 8px rgba(44,38,32,.08);
+    padding: 6px; display: none;
     animation: proj-ovf-pop 160ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .proj-ovf-menu.open { display: block; }
   .proj-ovf-item {
-    display: block; width: 100%; text-align: left; font: inherit; font-size: 12px;
-    padding: 7px 10px; border: 0; border-radius: 7px; background: transparent;
+    display: block; width: 100%; text-align: left;
+    font: inherit; font-size: 12px; font-weight: 500;
+    padding: 8px 11px; border: 0; border-radius: 8px; background: transparent;
     color: var(--ink); cursor: pointer; white-space: nowrap;
     transition: background .1s;
   }
@@ -270,7 +283,10 @@
     from { opacity: 0; transform: translateY(-6px) scale(.97); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
-  @media (prefers-reduced-motion: reduce) { .proj-ovf-menu { animation: none; } .proj-overflow .ovf-caret { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .proj-ovf-menu { animation: none; }
+    .proj-overflow .ovf-caret, .project-tabs .proj-tab { transition: none; }
+  }
 
   /* Tag legend popover — anchored under the Tags button */
   .tag-legend {
@@ -4732,7 +4748,7 @@ async function loadProjectTabs() {
     if (!r.ok) return;
     data = await r.json();
   } catch (_) { return; }
-  const boards = (data && data.boards) || [];
+  const boards = _applyProjOrder((data && data.boards) || []);   // #849 user drag order
   if (boards.length < 2) { nav.style.display = 'none'; return; }  // nothing to switch to
   nav.innerHTML = '';
   const scroll = document.createElement('div');
@@ -4744,11 +4760,18 @@ async function loadProjectTabs() {
     // in-place swap that would wrongly keep the home tab lit).
     btn.className = 'proj-tab' + (b.port === activePort ? ' active' : '');
     btn.textContent = cleanProjectTitle(b.title) || ('Board ' + b.port);
-    btn.title = b.path + (b.running ? '' : ' (stopped — click to start)');
+    btn.title = b.path + (b.running ? '' : ' (stopped — click to start)') + ' · drag to reorder';
     btn._board = b;   // #848 — overflow menu items reuse this to call switchProject
     if (b.port !== activePort) {
-      btn.addEventListener('click', () => switchProject(btn, b));
+      btn.addEventListener('click', () => { if (_tabDidDrag) return; switchProject(btn, b); });
     }
+    // #849 — native drag-reorder. Persists a per-browser tab order (localStorage).
+    btn.draggable = true;
+    btn.addEventListener('dragstart', (e) => onTabDragStart(e, btn));
+    btn.addEventListener('dragover',  (e) => onTabDragOver(e, btn));
+    btn.addEventListener('dragleave', ()  => btn.classList.remove('drop-before', 'drop-after'));
+    btn.addEventListener('drop',      (e) => onTabDrop(e, btn));
+    btn.addEventListener('dragend',   ()  => onTabDragEnd());
     scroll.appendChild(btn);
   }
   nav.appendChild(scroll);
@@ -4756,6 +4779,9 @@ async function loadProjectTabs() {
   // #848 — the overflow chip + dropdown (hidden until reflow finds hidden tabs).
   const wrap = document.createElement('div');
   wrap.className = 'proj-ovf-wrap';
+  const div = document.createElement('div');   // hairline before the chip
+  div.className = 'proj-ovf-div';
+  wrap.appendChild(div);
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'proj-overflow';
@@ -4778,6 +4804,65 @@ async function loadProjectTabs() {
 // #848 — caret SVG (no emoji; crisp, themes via currentColor).
 const _OVF_CARET = '<svg class="ovf-caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
 
+// #849 — per-browser tab order, persisted in localStorage and applied on render.
+// Keyed by board PATH (stable across port reassignment). It's a VIEW preference,
+// not board data — never written to any board.json, so it can't affect another
+// session's cards.
+function _loadProjOrder() {
+  try { return JSON.parse(localStorage.getItem('wb:proj-order') || '[]'); } catch (_) { return []; }
+}
+function _saveProjOrder(arr) {
+  try { localStorage.setItem('wb:proj-order', JSON.stringify(arr)); } catch (_) {}
+}
+// Sort boards by the saved order (by path); boards not in the saved order keep the
+// server's order (by port), appended after the known ones.
+function _applyProjOrder(boards) {
+  const order = _loadProjOrder();
+  if (!order.length) return boards;
+  const rank = p => { const i = order.indexOf(p); return i < 0 ? 1e9 : i; };
+  return boards.slice().sort((a, b) => (rank(a.path) - rank(b.path)) || (a.port - b.port));
+}
+
+let _tabDragPath = null;     // path of the tab being dragged
+let _tabDidDrag = false;     // suppress the click that can fire right after a native drag
+function onTabDragStart(e, btn) {
+  _tabDragPath = btn._board.path;
+  _tabDidDrag = true;
+  try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', _tabDragPath); } catch (_) {}
+  btn.classList.add('dragging');
+  closeOverflowMenu();
+}
+function onTabDragOver(e, btn) {
+  if (_tabDragPath == null || btn._board.path === _tabDragPath) return;
+  e.preventDefault();                       // allow drop
+  try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+  const r = btn.getBoundingClientRect();
+  const before = e.clientX < r.left + r.width / 2;
+  btn.classList.toggle('drop-before', before);
+  btn.classList.toggle('drop-after', !before);
+}
+function onTabDrop(e, btn) {
+  e.preventDefault();
+  const before = btn.classList.contains('drop-before');
+  btn.classList.remove('drop-before', 'drop-after');
+  if (_tabDragPath == null || btn._board.path === _tabDragPath) return;
+  const scroll = btn.closest('.proj-tabs-scroll');
+  const order = Array.from(scroll.querySelectorAll('.proj-tab')).map(t => t._board.path);
+  const from = order.indexOf(_tabDragPath);
+  if (from < 0) return;
+  order.splice(from, 1);
+  const ti = order.indexOf(btn._board.path);
+  order.splice(before ? ti : ti + 1, 0, _tabDragPath);
+  _saveProjOrder(order);
+  loadProjectTabs();          // re-render in the new order (active stays active)
+}
+function onTabDragEnd() {
+  document.querySelectorAll('.proj-tab.dragging, .proj-tab.drop-before, .proj-tab.drop-after')
+    .forEach(t => t.classList.remove('dragging', 'drop-before', 'drop-after'));
+  _tabDragPath = null;
+  setTimeout(() => { _tabDidDrag = false; }, 60);   // let the suppressed click pass first
+}
+
 // Decide which tabs fit; collapse the rest into the "+N Boards" chip. The ACTIVE
 // tab is always kept visible (never hidden into overflow). Idempotent — safe to
 // call on load, after a swap, and on every (debounced) resize.
@@ -4793,14 +4878,15 @@ function reflowProjectTabs() {
   tabs.forEach(t => { t.style.display = ''; });
   wrap.style.display = 'none';
   scroll.style.minWidth = '';   // drop any floor from a previous pass before measuring
-  const GAP = 6;
+  const GAP = 2;                // inter-tab gap (matches .proj-tabs-scroll gap)
+  const PAD = 6;                // track padding (3px each side) eats usable width
   const widths = tabs.map(t => t.getBoundingClientRect().width);
   const natural = widths.reduce((a, b) => a + b, 0) + GAP * (tabs.length - 1);
   // Budget against the NAV's box, not scroll.clientWidth: the scroller is
   // flex-shrinkable, so with the chip hidden it expands to fill the chip's future
   // space and over-reports the room — which clipped the active tab once the chip
-  // appeared. nav.clientWidth is the stable container budget.
-  const avail = nav.clientWidth;
+  // appeared. nav.clientWidth is the stable container budget (minus its padding).
+  const avail = nav.clientWidth - PAD;
   if (natural <= avail + 0.5) { closeOverflowMenu(); return; }   // everything fits
 
   // Need the chip. Show it to measure its width, then greedily keep tabs from the
