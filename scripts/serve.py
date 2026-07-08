@@ -249,14 +249,66 @@ def _board_present(board_dir) -> bool:
         return False
 
 
-def _port_healthy(port: int, timeout: float = 0.4) -> bool:
-    """True if a board server answers /health on this port."""
+def _port_healthy(port: int, timeout: float = 0.4,
+                  expect_board: str | None = None) -> bool:
+    """True if a board server answers /health on this port.
+
+    With `expect_board`, also verify the responder actually serves THAT board
+    (#858): a stale server left behind by a moved project keeps answering
+    /health on its old port, so "the port answers" alone routed tabs to a
+    server whose board.json 404s ("cannot open"). Permissive when the payload
+    omits the board path (a LAN-AUTH server trims it for unauthenticated
+    callers, #842) — we can't verify, so keep the legacy behaviour."""
     try:
         with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/health", timeout=timeout) as r:
-            return r.status == 200
+            if r.status != 200:
+                return False
+            if expect_board is None:
+                return True
+            body = r.read()
     except Exception:
         return False
+    try:
+        served = (json.loads(body) or {}).get("board")
+    except Exception:
+        return False   # 200 but not a board server → squatter
+    if not served:
+        return True    # auth-trimmed payload — can't verify, don't flap
+    try:
+        return str(Path(served).resolve()) == str(Path(expect_board).resolve())
+    except OSError:
+        return False
+
+
+def _port_in_use(port: int) -> bool:
+    """Raw TCP check — is ANYTHING listening on this localhost port?"""
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.2)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _reassign_squatted(board_dir: str, old_port: int) -> int | None:
+    """#858 — the board's designated port is held by a stale/foreign server we
+    can't bind over. Move the DESIGNATION to the lowest free port (explicit
+    set_port — the registry stays the single source of truth; this is not the
+    silent walk-forward #377 forbids). Returns the new port, or None if the
+    window is exhausted."""
+    import port_registry as _pr
+    try:
+        taken = {int(v) for v in (_pr.assignments() or {}).values()}
+    except Exception:
+        taken = set()
+    for p in range(_pr.PORT_LO, _pr.PORT_HI + 1):
+        if p == old_port or p in taken or _port_in_use(p):
+            continue
+        try:
+            _pr.set_port(board_dir, p)
+        except Exception:
+            return None
+        return p
+    return None
 
 
 def _spawn_board(board_dir, port: int) -> bool:
@@ -278,7 +330,7 @@ def _spawn_board(board_dir, port: int) -> bool:
     except Exception:
         return False
     for _ in range(25):          # ~5s at 0.2s
-        if _port_healthy(port):
+        if _port_healthy(port, expect_board=str(board_dir)):   # #858 — right board, not just any 200
             return True
         time.sleep(0.2)
     return False
@@ -743,7 +795,9 @@ class BoardHandler(BaseHTTPRequestHandler):
                 "path": path,
                 "port": port,
                 "title": _board_title_for(path),
-                "running": _port_healthy(port),
+                # #858 — identity-checked: a stale server squatting the port
+                # (e.g. after a project move) must read as NOT running.
+                "running": _port_healthy(port, expect_board=path),
             })
         boards.sort(key=lambda b: b["port"])
         self._send(200, json.dumps({
@@ -782,7 +836,16 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send(400, b'{"error":"unknown board path"}')
             return
         port = assigns[target]
-        if not _port_healthy(port):
+        if not _port_healthy(port, expect_board=target):
+            # #858 — if the port ANSWERS but serves a different board (stale
+            # server from a moved project), we can't bind over it: move the
+            # designation to a fresh port and spawn there. All consumers
+            # resolve through the registry, so they follow the new port.
+            if _port_in_use(port):
+                port = _reassign_squatted(target, port)
+                if port is None:
+                    self._send(504, b'{"error":"no free port for board"}')
+                    return
             if not _spawn_board(target, port):
                 self._send(504, b'{"error":"could not start board"}')
                 return

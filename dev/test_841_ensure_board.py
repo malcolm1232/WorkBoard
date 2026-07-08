@@ -54,7 +54,7 @@ def test_already_up():
     spawned = {"n": 0}
     def fake_spawn(*a, **k): spawned["n"] += 1; return True
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(serve, "_port_healthy", lambda port: True), \
+         mock.patch.object(serve, "_port_healthy", lambda port, **kw: True), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
     check(cap.status == 200, "already-up returns 200")
@@ -68,13 +68,15 @@ def test_spawn_when_down():
     cap = _Cap()
     h = make_handler("/x/AAA/board", cap)
     health = {"calls": 0}
-    def fake_health(port):       # down first, up after spawn
+    def fake_health(port, **kw):     # down first, up after spawn
         health["calls"] += 1
         return health["calls"] > 1
     spawned = {"n": 0}
     def fake_spawn(board_dir, port): spawned["n"] += 1; return True
+    # _port_in_use MUST be faked: the real check hits live localhost ports (#858).
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
          mock.patch.object(serve, "_port_healthy", fake_health), \
+         mock.patch.object(serve, "_port_in_use", lambda port: False), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
     check(cap.status == 200, "spawn path returns 200")
@@ -86,13 +88,40 @@ def test_spawn_fails_504():
     cap = _Cap()
     h = make_handler("/x/AAA/board", cap)
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(serve, "_port_healthy", lambda port: False), \
+         mock.patch.object(serve, "_port_healthy", lambda port, **kw: False), \
+         mock.patch.object(serve, "_port_in_use", lambda port: False), \
          mock.patch.object(serve, "_spawn_board", lambda board_dir, port: False):
         h._handle_ensure_board()
     check(cap.status == 504, "spawn failure returns 504")
 
 
+def test_squatted_port_reassigns():
+    """#858 — the designated port ANSWERS /health but serves a DIFFERENT board
+    (stale server after a project move). ensure-board must move the designation
+    to a fresh port (explicit set_port) and spawn there — never route the tab
+    to the squatter, never try to bind over it."""
+    cap = _Cap()
+    h = make_handler("/x/AAA/board", cap)
+    spawned = {}
+    def fake_spawn(board_dir, port): spawned["port"] = port; return True
+    reassigned = {}
+    def fake_set_port(board_dir, port): reassigned[str(board_dir)] = port
+    with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
+         mock.patch.object(pr, "set_port", fake_set_port), \
+         mock.patch.object(serve, "_port_healthy", lambda port, **kw: False), \
+         mock.patch.object(serve, "_port_in_use", lambda port: port == 7891), \
+         mock.patch.object(serve, "_spawn_board", fake_spawn):
+        h._handle_ensure_board()
+    check(cap.status == 200, "squatted port returns 200")
+    new_port = json.loads(cap.body)["port"]
+    check(new_port != 7891, "did not return the squatted port")
+    check(new_port not in ASSIGNS.values(), "new port avoids other designations")
+    check(reassigned.get("/x/AAA/board") == new_port, "designation moved via set_port")
+    check(spawned.get("port") == new_port, "spawned on the NEW port")
+
+
 if __name__ == "__main__":
     test_unknown_path(); test_already_up(); test_spawn_when_down(); test_spawn_fails_504()
+    test_squatted_port_reassigns()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

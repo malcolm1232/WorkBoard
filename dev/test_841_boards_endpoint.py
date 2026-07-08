@@ -53,7 +53,7 @@ def test():
         return str(path) in _present
 
     _healthy_ports = {7891, 7892}  # AAA + CCC up; BBB (7893) down
-    def fake_port_healthy(port, timeout=0.4):
+    def fake_port_healthy(port, timeout=0.4, expect_board=None):
         return port in _healthy_ports
 
     cap = _Cap()
