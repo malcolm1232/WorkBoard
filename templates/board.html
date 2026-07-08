@@ -4995,7 +4995,19 @@ function reflowProjectTabs() {
   // flex-shrinkable, so with the chip hidden it expands to fill the chip's future
   // space and over-reports the room — which clipped the active tab once the chip
   // appeared. nav.clientWidth is the stable container budget (minus its padding).
-  const avail = nav.clientWidth - PAD;
+  let avail = nav.clientWidth - PAD;
+  // #857 — the board title is absolutely CENTERED in the header (out of flow), so
+  // flexbox lets the nav grow right underneath it: tabs painted below the title and
+  // the "+N Boards" chip never engaged, because nav.clientWidth never shrank. Clamp
+  // the budget at the title's left edge (its center position doesn't depend on nav
+  // contents, so measuring here is stable). Below the 860px breakpoint the title is
+  // a normal flex item and nav.clientWidth is honest again — skip the clamp there.
+  const titleWrap = document.querySelector('header .title-wrap');
+  if (titleWrap && getComputedStyle(titleWrap).position === 'absolute') {
+    const room = titleWrap.getBoundingClientRect().left
+                 - nav.getBoundingClientRect().left - 12;   // 12px breathing gap
+    avail = Math.min(avail, Math.max(0, room) - PAD);
+  }
   if (natural <= avail + 0.5) { closeOverflowMenu(); return; }   // everything fits
 
   // Need the chip. Show it to measure its width, then greedily keep tabs from the
@@ -5003,6 +5015,13 @@ function reflowProjectTabs() {
   // Explicit 'inline-flex' (not '') — the CSS default for .proj-ovf-wrap is
   // display:none, so '' would resolve back to none and the chip would be invisible.
   wrap.style.display = 'inline-flex';
+  // #857 — on the FIRST pass the chip is still empty (buildOverflowMenu writes its
+  // label only after this measurement), so chipW under-reported by the label width
+  // and one tab too many was kept. Seed a worst-case label before measuring.
+  const chipBtn = wrap.querySelector('.proj-overflow');
+  if (chipBtn && !chipBtn.firstChild) {
+    chipBtn.innerHTML = '+' + (tabs.length - 1) + ' Boards' + _OVF_CARET;
+  }
   const chipW = wrap.getBoundingClientRect().width + GAP;
   const activeIdx = tabs.findIndex(t => t.classList.contains('active'));
   let budget = avail - chipW;
@@ -5156,7 +5175,12 @@ function applyBoardTitle() {
   if (!el || !state) return;
   if (el.dataset.editing === '1') return; // don't clobber mid-edit
   const t = cleanProjectTitle(state.title) || 'WorkBoard';
-  el.textContent = t;
+  if (el.textContent !== t) {
+    el.textContent = t;
+    // #857 — the tab budget clamps at the centered title's left edge, so a title
+    // width change moves that edge; re-measure or the clamp goes stale.
+    requestAnimationFrame(reflowProjectTabs);
+  }
   document.title = t;
 }
 
