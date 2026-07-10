@@ -259,11 +259,22 @@ serve_py="$(dirname "$0")/serve.py"
 # Resolve THIS board's designated port (#374) — per-project, stable, never
 # collides. We probe/spawn only that port, so a session for project B can't
 # latch onto project A's server just because A happens to hold 7891.
-want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${board_dir}" "$(dirname "$0")" 2>/dev/null || echo 7891)"
-
-# Probe for THIS board's live server on its designated port.
-server_health="$(curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
+# #858 review-2 — identity-aware resolution, shared with serve.py's guard and
+# card.py board-new (serve.resolve_designated → _confirmed_probe). The old bare
+# curl accepted ANY answerer (a stale server from a moved project routed the
+# whole session to the wrong board) and read a slow-but-ours /health (it shells
+# out to git, ~2s worst case) as "down". A POSITIVELY foreign holder gets the
+# designation moved BEFORE we spawn into its port. Prints "<port> <ok|spawn>".
+resolved="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import serve; p, s = serve.resolve_designated(sys.argv[1]); print(p, s)" "${board_dir}" "$(dirname "$0")" 2>/dev/null || echo "7891 spawn")"
+want_port="${resolved%% *}"
 server_port="${want_port}"
+
+# Fetch /health CONTENT (rev/cards for the digest) only when identity-verified.
+if [ "${resolved##* }" = "ok" ]; then
+  server_health="$(curl -s --max-time 3 "http://127.0.0.1:${want_port}/health" 2>/dev/null)"
+else
+  server_health=""
+fi
 
 # Auto-spawn if no server (covers users without launchd installed).
 if [ -z "${server_health}" ] && [ -f "${serve_py}" ]; then

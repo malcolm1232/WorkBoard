@@ -330,6 +330,41 @@ def _reassign_squatted(board_dir: str, old_port: int) -> int | None:
     return None
 
 
+def _confirmed_probe(port: int, expect_board: str) -> str:
+    """_probe_board with the slow-server allowance every consumer needs: an
+    "unreachable" verdict while SOMETHING is listening gets one generous
+    re-probe (a healthy server's own /health shells out to git, ~2s worst
+    case, so a short-timeout miss under load is expected). Nothing listening
+    skips the wait — a dead port can't be a slow server. This is THE
+    identity check for the session-start hook, card.py board-new, serve.py's
+    own startup and /ensure-board; keep them on one implementation (#858)."""
+    state = _probe_board(port, expect_board=expect_board)
+    if state == "unreachable" and _port_in_use(port):
+        state = _probe_board(port, expect_board=expect_board, timeout=3.0)
+    return state
+
+
+def resolve_designated(board_dir) -> tuple[int, str]:
+    """Identity-aware designated-port resolution for spawn-side consumers
+    (the session-start hook, card.py board-new). Returns (port, state):
+      ("ok", port)    — a healthy server for THIS board already answers there.
+      ("spawn", port) — start one on `port`; if the old port was positively
+                        held by a FOREIGN server the designation has already
+                        been moved (never spawn into a squatted port)."""
+    import port_registry as _pr
+    bd = str(Path(board_dir).resolve())
+    port = _pr.assign(bd)
+    state = _confirmed_probe(port, bd)
+    if state == "ok":
+        return port, "ok"
+    if state == "wrong":
+        new = _reassign_squatted(bd, port)
+        if new is not None:
+            return new, "spawn"
+        # window exhausted — fall through; the spawn will fail loudly
+    return port, "spawn"
+
+
 def _spawn_board(board_dir, port: int) -> bool:
     """Spawn a board server for board_dir on `port`, detached, then poll /health
     until up (~5s). Returns True once healthy. Detached launch equivalent to the
@@ -855,15 +890,11 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send(400, b'{"error":"unknown board path"}')
             return
         port = assigns[target]
-        state = _probe_board(port, expect_board=target)
-        if state == "unreachable":
-            # A healthy server's own /health shells out to git (~2s worst
-            # case), so a short-timeout miss is expected under load. Confirm
-            # with a generous timeout before concluding anything — the old
-            # `not healthy + port in use → squatter` inference here permanently
-            # reassigned the port and spawned a DUPLICATE server (two live
-            # writers on one board.json) off a single 0.4s blip.
-            state = _probe_board(port, expect_board=target, timeout=3.0)
+        # _confirmed_probe re-probes a listening-but-slow server generously —
+        # the old `not healthy + port in use → squatter` inference here
+        # permanently reassigned the port and spawned a DUPLICATE server (two
+        # live writers on one board.json) off a single 0.4s blip.
+        state = _confirmed_probe(port, target)
         if state != "ok":
             if state == "wrong":
                 # #858 — the port ANSWERS but serves a different board (stale
@@ -1295,19 +1326,27 @@ def _run_server(board_dir, args):
     # Singleton guard (#377): if a live server is ALREADY serving THIS board on
     # its designated port, don't start a second one — exit cleanly. Keeps "one
     # server per project" true even when both launchd and a session hook race to
-    # spawn (the prior bug: two WorkBoard servers on 7891 AND 7892). Only the
-    # SAME board short-circuits; a different board on the port falls through to
-    # the walk-forward bind below.
+    # spawn (the prior bug: two WorkBoard servers on 7891 AND 7892).
+    # #858 review-2: shares _confirmed_probe with every other consumer, so a
+    # slow-but-ours server (its /health stalls on git past a short probe) reads
+    # as a duplicate → exit 0, not a bind-fail → exit 1 launchd flap. And a
+    # POSITIVELY foreign holder (stale server from a moved project) moves OUR
+    # designation before the bind — binding into a squatted port can only flap.
     try:
-        import urllib.request, json as _json
-        with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/health", timeout=0.5) as _r:
-            _h = _json.load(_r)
-        if str(Path(_h.get("board", "")).resolve()) == str(Path(board_dir).resolve()):
-            print(f"board already served at http://127.0.0.1:{args.port} — "
-                  f"not starting a duplicate", file=sys.stderr)
-            return
+        _guard_state = _confirmed_probe(args.port, str(board_dir))
     except Exception:
-        pass
+        _guard_state = "unreachable"
+    if _guard_state == "ok":
+        print(f"board already served at http://127.0.0.1:{args.port} — "
+              f"not starting a duplicate", file=sys.stderr)
+        return
+    if _guard_state == "wrong":
+        _new_port = _reassign_squatted(str(Path(board_dir).resolve()), args.port)
+        if _new_port is not None:
+            print(f"designated port {args.port} is held by a foreign server — "
+                  f"designation moved to {_new_port}", file=sys.stderr)
+            args.port = _new_port
+            BoardHandler.port = _new_port
     # Bind the DESIGNATED port and only that port. ThreadingHTTPServer sets
     # SO_REUSEADDR, so a TIME_WAIT left by our own just-exited server clears —
     # retry briefly to ride it out. We deliberately do NOT walk to a different

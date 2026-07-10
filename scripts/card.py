@@ -543,13 +543,28 @@ def cmd_board_new(args):
         except Exception:
             pass
 
+    def _ours(port):
+        # #858 review-2 — identity-aware, not just "something answers TCP":
+        # a stale server from a moved project (or any foreign service) on the
+        # designated port must not be reported as this board "already running".
+        # serve.py's _confirmed_probe tolerates a slow-but-ours /health.
+        if not port:
+            return False
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import serve as _serve
+            return _serve._confirmed_probe(int(port), str(board_dir)) == "ok"
+        except Exception:
+            return _alive(port)   # probe layer unavailable → legacy TCP check
+
     exists = (board_dir / "board.json").exists()
     known = _known_port()
     # #836 — only scan for a live server when the board ALREADY exists; a
     # brand-new board can't be served yet, so skip the needless /health probes.
-    if exists and not _alive(known):
+    if exists and not _ours(known):
         known = _serving_port()   # registry miss but a server is up? find it.
-    if exists and _alive(known):
+    if exists and known:
+        # known is identity-verified either way (_ours or _serving_port).
         print(f"board '{name}' is already running → http://127.0.0.1:{known}")
         _hint()
         _open(known)
