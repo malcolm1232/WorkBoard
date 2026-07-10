@@ -30,6 +30,14 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
+# Isolate registry writes: reassignment persists via port_registry.reassign
+# (a locked file write, #633), so point it at a temp file, never the real one.
+import os  # noqa: E402
+_STATE = Path(tempfile.mkdtemp(prefix="t858tt-"))
+os.environ["BOARD_ASSIGNMENTS"] = str(_STATE / "assignments.json")
+os.environ["BOARD_REGISTRY"] = str(_STATE / "registry.json")
+os.environ["BOARD_ACTIVE"] = str(_STATE / "last-active")
+
 _fails = 0
 def check(cond, msg):
     global _fails
@@ -37,7 +45,14 @@ def check(cond, msg):
     if not cond: _fails += 1
 
 import serve  # noqa: E402
-import port_registry as pr  # noqa: E402
+
+def seed_assignments(mapping: dict) -> str:
+    """Write the isolated assignments file and return its pre-state text."""
+    Path(os.environ["BOARD_ASSIGNMENTS"]).write_text(json.dumps(mapping))
+    return Path(os.environ["BOARD_ASSIGNMENTS"]).read_text()
+
+def read_assignments() -> dict:
+    return json.loads(Path(os.environ["BOARD_ASSIGNMENTS"]).read_text())
 
 
 class _Cap:
@@ -84,14 +99,13 @@ def test_slow_correct_server_is_not_a_squatter():
     try:
         cap = _Cap()
         h = make_handler(board_dir, cap)
-        reassigned, spawned = {}, {"n": 0}
+        before = seed_assignments({board_dir: port})
+        spawned = {"n": 0}
         def fake_spawn(*a, **k): spawned["n"] += 1; return True
-        with mock.patch.object(pr, "assignments", lambda: {board_dir: port}), \
-             mock.patch.object(pr, "set_port",
-                               lambda bd, p: reassigned.update({str(bd): p})), \
-             mock.patch.object(serve, "_spawn_board", fake_spawn):
+        with mock.patch.object(serve, "_spawn_board", fake_spawn):
             h._handle_ensure_board()
-        check(reassigned == {}, "slow-but-correct server: registry NOT rewritten")
+        check(Path(os.environ["BOARD_ASSIGNMENTS"]).read_text() == before,
+              "slow-but-correct server: registry NOT rewritten")
         check(spawned["n"] == 0, "slow-but-correct server: NO duplicate spawn")
         check(cap.status == 200, "returns 200")
         check(cap.status == 200 and json.loads(cap.body)["port"] == port,
@@ -103,25 +117,23 @@ def test_slow_correct_server_is_not_a_squatter():
 def test_wrong_board_still_reassigns():
     """Regression guard for the genuine #858 squatter: fast 200 with a
     DIFFERENT board path must still move the designation and spawn fresh."""
-    board_dir = str(Path(tempfile.mkdtemp()) / "board"); Path(board_dir).mkdir()
-    other_dir = str(Path(tempfile.mkdtemp()) / "board"); Path(other_dir).mkdir()
+    board_dir = str((Path(tempfile.mkdtemp()) / "board").resolve()); Path(board_dir).mkdir()
+    other_dir = str((Path(tempfile.mkdtemp()) / "board").resolve()); Path(other_dir).mkdir()
     srv, port = _health_server(other_dir, delay=0.0)   # answers as the WRONG board
     try:
         cap = _Cap()
         h = make_handler(board_dir, cap)
-        reassigned, spawned = {}, {}
-        with mock.patch.object(pr, "assignments", lambda: {board_dir: port}), \
-             mock.patch.object(pr, "set_port",
-                               lambda bd, p: reassigned.update({str(bd): p})), \
-             mock.patch.object(serve, "_spawn_board",
+        seed_assignments({board_dir: port})
+        spawned = {}
+        with mock.patch.object(serve, "_spawn_board",
                                lambda bd, p: spawned.update({"port": p}) or True):
             h._handle_ensure_board()
         check(cap.status == 200, "real squatter: returns 200")
         new_port = json.loads(cap.body)["port"] if cap.status == 200 else None
         check(new_port is not None and new_port != port,
               "real squatter: designation moved off the squatted port")
-        check(reassigned.get(board_dir) == new_port,
-              "real squatter: registry rewritten via set_port")
+        check(read_assignments().get(board_dir) == new_port,
+              "real squatter: registry rewritten with the new designation")
         check(spawned.get("port") == new_port, "real squatter: spawned on NEW port")
     finally:
         srv.shutdown()
@@ -136,13 +148,11 @@ def test_hung_listener_never_reassigns():
     try:
         cap = _Cap()
         h = make_handler(board_dir, cap)
-        reassigned = {}
-        with mock.patch.object(pr, "assignments", lambda: {board_dir: port}), \
-             mock.patch.object(pr, "set_port",
-                               lambda bd, p: reassigned.update({str(bd): p})), \
-             mock.patch.object(serve, "_spawn_board", lambda bd, p: False):
+        before = seed_assignments({board_dir: port})
+        with mock.patch.object(serve, "_spawn_board", lambda bd, p: False):
             h._handle_ensure_board()
-        check(reassigned == {}, "hung listener: registry NOT rewritten")
+        check(Path(os.environ["BOARD_ASSIGNMENTS"]).read_text() == before,
+              "hung listener: registry NOT rewritten")
         check(cap.status == 504, "hung listener: 504 (spawn blocked), not a reassign")
     finally:
         lsock.close()

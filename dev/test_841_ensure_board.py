@@ -5,12 +5,18 @@ returns {port,url}. Rejects unknown paths (no arbitrary spawn).
 Run: python3 dev/test_841_ensure_board.py  → exit 0 = green, 1 = a fail.
 """
 from __future__ import annotations
-import json, sys
+import json, os, sys, tempfile
 from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+
+# Isolate registry writes (#858: reassign persists via port_registry.reassign).
+_STATE = Path(tempfile.mkdtemp(prefix="t841-"))
+os.environ["BOARD_ASSIGNMENTS"] = str(_STATE / "assignments.json")
+os.environ["BOARD_REGISTRY"] = str(_STATE / "registry.json")
+os.environ["BOARD_ACTIVE"] = str(_STATE / "last-active")
 
 _fails = 0
 def check(cond, msg):
@@ -96,23 +102,27 @@ def test_squatted_port_reassigns():
     allowed to move the designation (explicit set_port) and spawn fresh —
     never route the tab to the squatter, never try to bind over it. Mere
     unreachability must NOT land here (see dev/test_858_transient_timeout.py)."""
+    # Real temp board dirs: port_registry.reassign GCs designations whose dir
+    # is gone, so fake /x/ paths would vanish from the file it rewrites.
+    aaa = Path(tempfile.mkdtemp(prefix="t841-aaa-")) / "board"; aaa.mkdir()
+    bbb = Path(tempfile.mkdtemp(prefix="t841-bbb-")) / "board"; bbb.mkdir()
+    aaa, bbb = str(aaa.resolve()), str(bbb.resolve())
+    assigns = {aaa: 7891, bbb: 7893}
+    Path(os.environ["BOARD_ASSIGNMENTS"]).write_text(json.dumps(assigns))
     cap = _Cap()
-    h = make_handler("/x/AAA/board", cap)
+    h = make_handler(aaa, cap)
     spawned = {}
     def fake_spawn(board_dir, port): spawned["port"] = port; return True
-    reassigned = {}
-    def fake_set_port(board_dir, port): reassigned[str(board_dir)] = port
-    with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(pr, "set_port", fake_set_port), \
-         mock.patch.object(serve, "_probe_board", lambda port, **kw: "wrong"), \
+    with mock.patch.object(serve, "_probe_board", lambda port, **kw: "wrong"), \
          mock.patch.object(serve, "_port_in_use", lambda port: port == 7891), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
     check(cap.status == 200, "squatted port returns 200")
     new_port = json.loads(cap.body)["port"]
     check(new_port != 7891, "did not return the squatted port")
-    check(new_port not in ASSIGNS.values(), "new port avoids other designations")
-    check(reassigned.get("/x/AAA/board") == new_port, "designation moved via set_port")
+    check(new_port not in assigns.values(), "new port avoids other designations")
+    after = json.loads(Path(os.environ["BOARD_ASSIGNMENTS"]).read_text())
+    check(after.get(aaa) == new_port, "designation moved in the assignments file")
     check(spawned.get("port") == new_port, "spawned on the NEW port")
 
 

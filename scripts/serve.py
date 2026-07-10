@@ -281,14 +281,25 @@ def _probe_board(port: int, expect_board: str | None = None,
     except Exception:
         return "unreachable"
     try:
-        served = (json.loads(body) or {}).get("board")
+        payload = json.loads(body)
     except Exception:
         return "wrong"   # 200 but not a board server → squatter
+    if not isinstance(payload, dict):
+        return "wrong"
+    served = payload.get("board")
     if not served:
-        return "ok"      # auth-trimmed payload — can't verify, don't flap
+        # Auth-trimmed payload (#842) — can't verify the path, don't flap. But
+        # permissiveness is ONLY for a payload carrying the board-server
+        # signature (/health always includes these, even trimmed): a generic
+        # service's {"status":"healthy"} must not pass the identity check.
+        if {"ok", "rev", "sseClients"} <= payload.keys():
+            return "ok"
+        return "wrong"
     try:
         same = str(Path(served).resolve()) == str(Path(expect_board).resolve())
-    except OSError:
+    except Exception:
+        # Not just OSError: {"board": 123} raises TypeError, and an escape
+        # here killed the whole /boards response for every board.
         return "wrong"
     return "ok" if same else "wrong"
 
@@ -310,24 +321,16 @@ def _port_in_use(port: int) -> bool:
 
 def _reassign_squatted(board_dir: str, old_port: int) -> int | None:
     """#858 — the board's designated port is held by a stale/foreign server we
-    can't bind over. Move the DESIGNATION to the lowest free port (explicit
-    set_port — the registry stays the single source of truth; this is not the
-    silent walk-forward #377 forbids). Returns the new port, or None if the
-    window is exhausted."""
+    can't bind over. Move the DESIGNATION to the lowest free port (the registry
+    stays the single source of truth; this is not the silent walk-forward #377
+    forbids). Delegates to port_registry.reassign, whose read→scan→write runs
+    inside the assignments lock (#633 TOCTOU). Returns the new port, or None
+    if the window is exhausted / the registry is unavailable."""
     import port_registry as _pr
     try:
-        taken = {int(v) for v in (_pr.assignments() or {}).values()}
+        return _pr.reassign(board_dir, old_port)
     except Exception:
-        taken = set()
-    for p in range(_pr.PORT_LO, _pr.PORT_HI + 1):
-        if p == old_port or p in taken or _port_in_use(p):
-            continue
-        try:
-            _pr.set_port(board_dir, p)
-        except Exception:
-            return None
-        return p
-    return None
+        return None
 
 
 def _confirmed_probe(port: int, expect_board: str) -> str:

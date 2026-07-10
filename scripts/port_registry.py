@@ -226,6 +226,43 @@ def set_port(board_dir: str | os.PathLike, port: int) -> None:
         _atomic_write_json(assignments_path(), a)
 
 
+def reassign(board_dir: str | os.PathLike, old_port: int) -> int | None:
+    """#858 — move `board_dir`'s designation off `old_port` (positively held by
+    a FOREIGN server we can't bind over) to the lowest free port. Returns the
+    new port, or None if the window is exhausted.
+
+    The whole read→scan→write runs INSIDE the assignments lock: an unlocked
+    scan (the original serve.py implementation) reintroduced the #633 TOCTOU —
+    two concurrent reassigns (launchd + a session hook racing at boot) both saw
+    the same free port and stamped two boards onto it. One malformed
+    designation value must not collapse the taken-set either (a bare
+    set-comprehension int() freed every other board's port on a single corrupt
+    entry), so values parse per-entry."""
+    import socket as _socket
+    key = str(Path(board_dir).resolve())
+
+    def _in_use(p: int) -> bool:
+        with _socket.socket() as s:
+            s.settimeout(0.2)
+            return s.connect_ex(("127.0.0.1", p)) == 0
+
+    with _file_lock(assignments_path().with_suffix(".lock")):
+        a = {k: v for k, v in assignments().items() if Path(k).exists()}
+        taken = set()
+        for v in a.values():
+            try:
+                taken.add(int(v))
+            except (TypeError, ValueError):
+                continue
+        for p in range(PORT_LO, PORT_HI + 1):
+            if p == old_port or p in taken or _in_use(p):
+                continue
+            a[key] = p
+            _atomic_write_json(assignments_path(), a)
+            return p
+    return None
+
+
 _ACTIVE_KEEP = 32  # cap on the per-session map (size, not age — never evict a live session)
 
 
