@@ -249,36 +249,55 @@ def _board_present(board_dir) -> bool:
         return False
 
 
-def _port_healthy(port: int, timeout: float = 0.4,
-                  expect_board: str | None = None) -> bool:
-    """True if a board server answers /health on this port.
+def _probe_board(port: int, expect_board: str | None = None,
+                 timeout: float = 0.4) -> str:
+    """Probe /health on this port. Returns one of three states — the split
+    matters because they warrant OPPOSITE reactions:
 
-    With `expect_board`, also verify the responder actually serves THAT board
-    (#858): a stale server left behind by a moved project keeps answering
-    /health on its old port, so "the port answers" alone routed tabs to a
-    server whose board.json 404s ("cannot open"). Permissive when the payload
-    omits the board path (a LAN-AUTH server trims it for unauthenticated
-    callers, #842) — we can't verify, so keep the legacy behaviour."""
+      "ok"          — a board server answered and (if expect_board) it serves
+                      that board. With `expect_board` this is the #858 identity
+                      check: a stale server left behind by a moved project
+                      keeps answering /health on its old port, so "the port
+                      answers" alone routed tabs to a server whose board.json
+                      404s ("cannot open"). Permissive when the payload omits
+                      the board path (a LAN-AUTH server trims it for
+                      unauthenticated callers, #842) — we can't verify, so
+                      keep the legacy behaviour.
+      "wrong"       — POSITIVE evidence the responder is not our board: a 200
+                      that isn't board-server JSON, or one naming a different
+                      board path. Only this state may justify a reassign.
+      "unreachable" — no evidence either way: timeout, connection refused,
+                      non-200. A healthy server's own /health can stall past a
+                      short timeout (it shells out to git), so unreachable
+                      must NEVER be treated as a squatter."""
     try:
         with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/health", timeout=timeout) as r:
             if r.status != 200:
-                return False
+                return "unreachable"
             if expect_board is None:
-                return True
+                return "ok"
             body = r.read()
     except Exception:
-        return False
+        return "unreachable"
     try:
         served = (json.loads(body) or {}).get("board")
     except Exception:
-        return False   # 200 but not a board server → squatter
+        return "wrong"   # 200 but not a board server → squatter
     if not served:
-        return True    # auth-trimmed payload — can't verify, don't flap
+        return "ok"      # auth-trimmed payload — can't verify, don't flap
     try:
-        return str(Path(served).resolve()) == str(Path(expect_board).resolve())
+        same = str(Path(served).resolve()) == str(Path(expect_board).resolve())
     except OSError:
-        return False
+        return "wrong"
+    return "ok" if same else "wrong"
+
+
+def _port_healthy(port: int, timeout: float = 0.4,
+                  expect_board: str | None = None) -> bool:
+    """True if a board server answers /health on this port (and, with
+    `expect_board`, serves that board — see _probe_board)."""
+    return _probe_board(port, expect_board=expect_board, timeout=timeout) == "ok"
 
 
 def _port_in_use(port: int) -> bool:
@@ -836,16 +855,30 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send(400, b'{"error":"unknown board path"}')
             return
         port = assigns[target]
-        if not _port_healthy(port, expect_board=target):
-            # #858 — if the port ANSWERS but serves a different board (stale
-            # server from a moved project), we can't bind over it: move the
-            # designation to a fresh port and spawn there. All consumers
-            # resolve through the registry, so they follow the new port.
-            if _port_in_use(port):
+        state = _probe_board(port, expect_board=target)
+        if state == "unreachable":
+            # A healthy server's own /health shells out to git (~2s worst
+            # case), so a short-timeout miss is expected under load. Confirm
+            # with a generous timeout before concluding anything — the old
+            # `not healthy + port in use → squatter` inference here permanently
+            # reassigned the port and spawned a DUPLICATE server (two live
+            # writers on one board.json) off a single 0.4s blip.
+            state = _probe_board(port, expect_board=target, timeout=3.0)
+        if state != "ok":
+            if state == "wrong":
+                # #858 — the port ANSWERS but serves a different board (stale
+                # server from a moved project): we can't bind over it, so move
+                # the designation to a fresh port and spawn there. All
+                # consumers resolve through the registry, so they follow the
+                # new port. Registry rewrite requires this POSITIVE identity
+                # mismatch — never mere unreachability.
                 port = _reassign_squatted(target, port)
                 if port is None:
                     self._send(504, b'{"error":"no free port for board"}')
                     return
+            # "unreachable" falls through to a same-port spawn: a down server
+            # gets restarted; a hung/foreign listener makes the spawn fail →
+            # 504 (self-healing on retry), leaving the registry untouched.
             if not _spawn_board(target, port):
                 self._send(504, b'{"error":"could not start board"}')
                 return

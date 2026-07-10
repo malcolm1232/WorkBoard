@@ -54,7 +54,7 @@ def test_already_up():
     spawned = {"n": 0}
     def fake_spawn(*a, **k): spawned["n"] += 1; return True
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(serve, "_port_healthy", lambda port, **kw: True), \
+         mock.patch.object(serve, "_probe_board", lambda port, **kw: "ok"), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
     check(cap.status == 200, "already-up returns 200")
@@ -67,16 +67,12 @@ def test_already_up():
 def test_spawn_when_down():
     cap = _Cap()
     h = make_handler("/x/AAA/board", cap)
-    health = {"calls": 0}
-    def fake_health(port, **kw):     # down first, up after spawn
-        health["calls"] += 1
-        return health["calls"] > 1
     spawned = {"n": 0}
     def fake_spawn(board_dir, port): spawned["n"] += 1; return True
-    # _port_in_use MUST be faked: the real check hits live localhost ports (#858).
+    # A down port is "unreachable" (both the fast probe and the generous
+    # confirming one) → spawn on the SAME port, no registry rewrite.
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(serve, "_port_healthy", fake_health), \
-         mock.patch.object(serve, "_port_in_use", lambda port: False), \
+         mock.patch.object(serve, "_probe_board", lambda port, **kw: "unreachable"), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
     check(cap.status == 200, "spawn path returns 200")
@@ -88,8 +84,7 @@ def test_spawn_fails_504():
     cap = _Cap()
     h = make_handler("/x/AAA/board", cap)
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
-         mock.patch.object(serve, "_port_healthy", lambda port, **kw: False), \
-         mock.patch.object(serve, "_port_in_use", lambda port: False), \
+         mock.patch.object(serve, "_probe_board", lambda port, **kw: "unreachable"), \
          mock.patch.object(serve, "_spawn_board", lambda board_dir, port: False):
         h._handle_ensure_board()
     check(cap.status == 504, "spawn failure returns 504")
@@ -97,9 +92,10 @@ def test_spawn_fails_504():
 
 def test_squatted_port_reassigns():
     """#858 — the designated port ANSWERS /health but serves a DIFFERENT board
-    (stale server after a project move). ensure-board must move the designation
-    to a fresh port (explicit set_port) and spawn there — never route the tab
-    to the squatter, never try to bind over it."""
+    (stale server after a project move): probe state "wrong", the ONLY state
+    allowed to move the designation (explicit set_port) and spawn fresh —
+    never route the tab to the squatter, never try to bind over it. Mere
+    unreachability must NOT land here (see dev/test_858_transient_timeout.py)."""
     cap = _Cap()
     h = make_handler("/x/AAA/board", cap)
     spawned = {}
@@ -108,7 +104,7 @@ def test_squatted_port_reassigns():
     def fake_set_port(board_dir, port): reassigned[str(board_dir)] = port
     with mock.patch.object(pr, "assignments", lambda: ASSIGNS), \
          mock.patch.object(pr, "set_port", fake_set_port), \
-         mock.patch.object(serve, "_port_healthy", lambda port, **kw: False), \
+         mock.patch.object(serve, "_probe_board", lambda port, **kw: "wrong"), \
          mock.patch.object(serve, "_port_in_use", lambda port: port == 7891), \
          mock.patch.object(serve, "_spawn_board", fake_spawn):
         h._handle_ensure_board()
