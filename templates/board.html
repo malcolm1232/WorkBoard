@@ -69,6 +69,10 @@
     cursor: pointer; padding: 3px 10px; border-radius: 5px;
     transition: background .12s;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    /* #866 — as a flex item, min-width:auto would refuse to shrink below the
+       full text, defeating the wrap's clamped max-width (the ellipsis never
+       engaged and the title slid under the right controls). */
+    min-width: 0;
   }
   header h1:hover { background: rgba(217,119,87,.10); }
   /* #731 — the absolutely-centered title floats on top of the right-side
@@ -83,6 +87,33 @@
       max-width: none; min-width: 0; flex: 0 1 auto; z-index: auto;
     }
     header h1 { min-width: 0; }   /* let the h1 ellipsis engage inside the flex item */
+  }
+  /* #866 — same drop-out-of-center as the #731 breakpoint, but driven by the
+     ACTUAL collision geometry (clampBoardTitle): above 860px the right control
+     cluster can still cross the header's center (pills + toggle are wide), and
+     no centered title fits there. */
+  header.title-inflow .title-wrap {
+    position: static; transform: none; left: auto; top: auto;
+    max-width: none; min-width: 0; flex: 0 1 auto; z-index: auto;
+  }
+  /* #866 — in the in-flow regime the header is ONE flex row and every zone
+     must shrink gracefully. Release the scroller's inline min-width floor
+     (!important beats the inline style reflow sets) and let the ACTIVE tab
+     ellipsize — its full name is in the tooltip — instead of the squeezed nav
+     hard-clipping the overflow chip mid-label ("+11 B|"). */
+  header.title-inflow .proj-tabs-scroll { min-width: 0 !important; }
+  header.title-inflow .project-tabs .proj-tab.active { flex: 0 1 auto; min-width: 90px; }
+  /* #866 — above the breakpoint the control labels must never wrap internally:
+     the cluster's width changing with available space is what fed the
+     centered↔in-flow oscillation (each mode re-wrapped the buttons and moved
+     the very edge the title clamps against). Fixed-width cluster → the header
+     settle converges. Phones (≤860px) keep the wrapping behaviour. */
+  @media (min-width: 861px) {
+    header button, header .header-pill, header .view-toggle { white-space: nowrap; }
+    /* The cluster is RIGID: it must never be squeezed into silently clipping a
+       button (Sort Time vanished). Flex takes the space from the shrinkable
+       zones instead — tabs (reflow hides them) and the in-flow title. */
+    header .header-pill, header .view-toggle { flex-shrink: 0; }
   }
   header h1[contenteditable="true"] {
     cursor: text; background: rgba(217,119,87,.10);
@@ -233,6 +264,10 @@
     cursor: pointer; padding: 5px 11px; border-radius: 999px;
     border: 0; background: transparent; color: var(--muted); white-space: nowrap;
     transition: background .14s, color .14s, box-shadow .14s, opacity .14s;
+    /* #866 — cap a tab's footprint (full name in the tooltip): an uncapped
+       long ACTIVE tab inflates the nav's irreducible minimum (active + chip),
+       which the centered title's left edge must clear. */
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis;
   }
   .project-tabs .proj-tab:hover { background: rgba(217,119,87,.10); color: var(--ink); }
   .project-tabs .proj-tab.active {
@@ -4834,7 +4869,7 @@ async function loadProjectTabs() {
   nav.style.display = 'flex';
   _wireOverflowGlobals();
   // Measure AFTER layout settles (fonts/flex) so widths are real.
-  requestAnimationFrame(reflowProjectTabs);
+  requestAnimationFrame(settleHeader);
 }
 
 // #848 — caret SVG (no emoji; crisp, themes via currentColor).
@@ -5148,7 +5183,7 @@ function _wireOverflowGlobals() {
   let _rt = 0;
   window.addEventListener('resize', () => {
     clearTimeout(_rt);
-    _rt = setTimeout(() => requestAnimationFrame(reflowProjectTabs), 120);
+    _rt = setTimeout(() => requestAnimationFrame(settleHeader), 120);
   });
 }
 
@@ -5203,6 +5238,118 @@ async function activateBoard(port) {
   } catch (_) { /* replaceState blocked → URL just stays put; swap still worked */ }
 }
 
+// #866 — in absolute-centered mode (>860px, #731) nothing bounded the title's
+// width against the RIGHT control cluster, so a half-minimized window slid the
+// title under Reset Columns / Sort Time (the tabs clamp themselves at the
+// title's LEFT edge — #857 — but the controls can't yield). Cap the wrap's
+// max-width at twice the distance from the header's center to the nearest
+// visible control, so the title stays dead-centered and ellipsizes instead of
+// colliding. Below the #731 breakpoint the wrap is a normal flex item and CSS
+// truncation already handles it — clear the inline cap there.
+function clampBoardTitle() {
+  const twrap = document.querySelector('header .title-wrap');
+  if (!twrap) return;
+  const header = twrap.closest('header');
+  // ≤860px: the #731 media query owns the layout (title in flow) — clear ours.
+  if (window.matchMedia('(max-width: 860px)').matches) {
+    twrap.style.maxWidth = '';
+    header.classList.remove('title-inflow');
+    return;
+  }
+  const hr = header.getBoundingClientRect();
+  const center = hr.left + hr.width / 2;
+  // Nearest visible control right of center bounds the title's right edge.
+  // Control positions are right-anchored (flex spacer), so this measurement is
+  // stable whether the title is currently centered or in-flow.
+  let limit = hr.right - 8;
+  for (const el of header.children) {
+    if (el === twrap || el.id === 'project-tabs' || el.classList.contains('sp')) continue;
+    const st = getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') continue;
+    const r = el.getBoundingClientRect();
+    if (r.left > center) limit = Math.min(limit, r.left);
+    else if (r.right > center) limit = Math.min(limit, center);  // cluster crosses center
+  }
+  // The LEFT edge is bounded by the tabs' irreducible minimum — the active tab
+  // plus the overflow chip, which the tabs' lesser-evil rule keeps on screen
+  // no matter what (#857). A centered title that ignores it sits on top of
+  // them. Both widths are stable inputs (the tab is max-width-capped).
+  let leftLimit = hr.left + 8;
+  const nav = document.getElementById('project-tabs');
+  if (nav && nav.style.display !== 'none') {
+    let minNav = nav.getBoundingClientRect().left + 6;
+    const active = nav.querySelector('.proj-tab.active');
+    if (active) minNav += active.getBoundingClientRect().width + 2;
+    const ovf = nav.querySelector('.proj-ovf-wrap');
+    if (ovf && getComputedStyle(ovf).display !== 'none') {
+      minNav += ovf.getBoundingClientRect().width + 2;
+    }
+    leftLimit = Math.max(leftLimit, minNav);
+  }
+  const GAPPX = 12;                                  // breathing gap, mirrors the tabs clamp
+  const maxW = 2 * Math.min(limit - GAPPX - center, center - GAPPX - leftLimit);
+  // Hysteresis: entering in-flow frees center space, which could immediately
+  // re-qualify centered mode — require meaningfully MORE room (160px) to come
+  // back than it took to leave (120px), so settleHeader can't flap.
+  const wasInflow = header.classList.contains('title-inflow');
+  if (maxW < (wasInflow ? 160 : 120)) {
+    // The control cluster (or its edge) reaches the header's center — no
+    // usable centered title exists. Drop it into flex flow (same styles as the
+    // #731 breakpoint) so it sits left and truncates instead of colliding.
+    header.classList.add('title-inflow');
+    twrap.style.maxWidth = '';
+  } else {
+    header.classList.remove('title-inflow');
+    // Keep the CSS 60% ceiling as the upper bound.
+    twrap.style.maxWidth = Math.floor(Math.min(0.6 * hr.width, maxW)) + 'px';
+  }
+}
+
+// #866 — the header's three zones are interdependent: tabs clamp at the
+// title's left edge (#857), the title clamps at the controls' edge, and
+// hiding/showing tabs re-floors the nav which can re-wrap the control cluster
+// and MOVE that edge. One pass of either function can therefore be stale.
+// Not a fixed pass count: shrinking the title widens the tabs, which can
+// re-wrap the control cluster and move the very edge the title clamps to.
+// Loop until the header's shape signature stops changing (bounded; the
+// in-flow hysteresis in clampBoardTitle prevents A↔B flapping).
+function settleHeader() {
+  const sig = () => {
+    const header = document.querySelector('header');
+    const twrap = header && header.querySelector('.title-wrap');
+    const nav = document.getElementById('project-tabs');
+    return [
+      twrap ? twrap.style.maxWidth : '',
+      header ? String(header.classList.contains('title-inflow')) : '',
+      nav ? Array.from(nav.querySelectorAll('.proj-tab'))
+                 .filter(t => t.style.display !== 'none').length : -1,
+    ].join('|');
+  };
+  let prev = sig();
+  const seen = new Set([prev]);
+  for (let i = 0; i < 6; i++) {
+    reflowProjectTabs();
+    clampBoardTitle();
+    const s = sig();
+    if (s === prev) return;   // converged — fixed point reached
+    if (seen.has(s)) {
+      // Revisited an OLDER state: the header GENUINELY oscillates — centered
+      // mode un-wraps the control cluster ("room!"), in-flow re-wraps it
+      // ("no room!"). No fixed point exists, so pin the one state that
+      // cannot overlap by construction: title in flex flow.
+      const header = document.querySelector('header');
+      const twrap = header && header.querySelector('.title-wrap');
+      if (header && !window.matchMedia('(max-width: 860px)').matches) {
+        header.classList.add('title-inflow');
+        if (twrap) twrap.style.maxWidth = '';
+        reflowProjectTabs();
+      }
+      return;
+    }
+    seen.add(s); prev = s;
+  }
+}
+
 // Read project name from board.json `title` field. Falls back gracefully.
 function applyBoardTitle() {
   const el = $('#board-title');
@@ -5218,10 +5365,12 @@ function applyBoardTitle() {
                 el.childElementCount > 0 || el.childNodes.length > 1;
   if (dirty) {
     el.textContent = t;
-    // #857 — the tab budget clamps at the centered title's left edge, so a title
-    // width change moves that edge; re-measure or the clamp goes stale.
-    requestAnimationFrame(reflowProjectTabs);
   }
+  // #857/#866 — a title width change moves the tabs' clamp edge, and controls'
+  // visibility can change on any render; re-settle the whole header (never a
+  // solo clamp — it could flip a pinned oscillation state without letting the
+  // tabs follow).
+  requestAnimationFrame(settleHeader);
   document.title = t;
 }
 
@@ -5230,6 +5379,14 @@ function wireBoardTitle() {
   const el = $('#board-title');
   if (!el || el.dataset.wired === '1') return;
   el.dataset.wired = '1';
+
+  // #866 — the title clamp must track window resizes even on single-board
+  // pages (the project-tabs resize listener is only wired when tabs render).
+  let _ct = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(_ct);
+    _ct = setTimeout(() => requestAnimationFrame(settleHeader), 120);
+  });
 
   el.addEventListener('click', () => {
     if (el.dataset.editing === '1') return; // editing — let caret place
