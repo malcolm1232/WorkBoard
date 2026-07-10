@@ -5006,7 +5006,7 @@ function reflowProjectTabs() {
   if (titleWrap && getComputedStyle(titleWrap).position === 'absolute') {
     const room = titleWrap.getBoundingClientRect().left
                  - nav.getBoundingClientRect().left - 12;   // 12px breathing gap
-    avail = Math.min(avail, Math.max(0, room) - PAD);
+    avail = Math.min(avail, Math.max(0, room - PAD));
   }
   if (natural <= avail + 0.5) { closeOverflowMenu(); return; }   // everything fits
 
@@ -5015,11 +5015,15 @@ function reflowProjectTabs() {
   // Explicit 'inline-flex' (not '') — the CSS default for .proj-ovf-wrap is
   // display:none, so '' would resolve back to none and the chip would be invisible.
   wrap.style.display = 'inline-flex';
-  // #857 — on the FIRST pass the chip is still empty (buildOverflowMenu writes its
-  // label only after this measurement), so chipW under-reported by the label width
-  // and one tab too many was kept. Seed a worst-case label before measuring.
+  // #857 — measurement must never trust the chip's CURRENT label: on the first
+  // pass it's empty, and on later resize reflows it still shows the PREVIOUS
+  // pass's count (e.g. "+2 Boards" while this pass will render "+10 Boards"),
+  // under-reporting chipW by the label delta so one tab too many was kept and
+  // the chip overhung the nav. ALWAYS seed the worst-case label (all tabs but
+  // the active one hidden) before measuring; buildOverflowMenu writes the real
+  // count right after.
   const chipBtn = wrap.querySelector('.proj-overflow');
-  if (chipBtn && !chipBtn.firstChild) {
+  if (chipBtn) {
     chipBtn.innerHTML = '+' + (tabs.length - 1) + ' Boards' + _OVF_CARET;
   }
   const chipW = wrap.getBoundingClientRect().width + GAP;
@@ -5034,14 +5038,44 @@ function reflowProjectTabs() {
     if (!over && budget - need >= 0) { budget -= need; tabs[i].style.display = ''; }
     else { over = true; tabs[i].style.display = 'none'; hidden.push(tabs[i]); }
   }
-  // Floor the scroller to its visible tabs so the active tab (and any kept
-  // neighbours) is never clipped to a sliver when the header is extremely tight
-  // (phone widths). The chip may then sit slightly past the nav rather than the
-  // active tab vanishing — the lesser evil, and it stays clickable.
-  const shown = tabs.filter(t => t.style.display !== 'none');
-  const shownW = shown.reduce((s, t) => s + t.getBoundingClientRect().width, 0)
-                 + GAP * Math.max(0, shown.length - 1);
-  scroll.style.minWidth = Math.ceil(shownW) + 'px';
+  // Floor the scroller to its visible tabs (from their pre-measured NATURAL
+  // widths) so the active tab and kept neighbours are never clipped to a
+  // sliver when the header is extremely tight (phone widths). The chip may
+  // then sit slightly past the nav rather than the active tab vanishing —
+  // the lesser evil, and it stays clickable.
+  const _floor = () => {
+    let w = 0, n = 0;
+    tabs.forEach((t, i) => { if (t.style.display !== 'none') { w += widths[i]; n++; } });
+    scroll.style.minWidth = Math.ceil(w + GAP * Math.max(0, n - 1)) + 'px';
+  };
+  _floor();
+
+  // #857 — the greedy keep above budgets against nav.clientWidth measured in
+  // the all-tabs-no-chip layout, but below the 860px breakpoint the nav is a
+  // shrinkable flex item: its FINAL width (tabs hidden, chip shown, floor
+  // applied) can be much narrower, so the estimate overshoots and the chip
+  // overhangs. Correct against the RENDERED geometry: while the chip crosses
+  // the budget edge and a non-active tab is still shown, hide the rightmost
+  // kept tab and re-floor. Converges — hiding only shrinks content. (The chip
+  // still carries the worst-case seeded label here, so the correction never
+  // under-reserves.)
+  const _edge = () => {
+    let lim = nav.getBoundingClientRect().right;
+    if (titleWrap && getComputedStyle(titleWrap).position === 'absolute') {
+      lim = Math.min(lim, titleWrap.getBoundingClientRect().left - 12);
+    }
+    return lim;
+  };
+  let _guard = tabs.length;
+  while (_guard-- > 0 && wrap.getBoundingClientRect().right > _edge() + 0.5) {
+    const kept = tabs.filter((t, i) => i !== activeIdx && t.style.display !== 'none');
+    if (!kept.length) break;   // only the active tab left — overhang is the lesser evil
+    const last = kept[kept.length - 1];
+    last.style.display = 'none';
+    hidden.push(last);
+    _floor();
+  }
+  hidden.sort((a, b) => tabs.indexOf(a) - tabs.indexOf(b));   // menu in tab order
   buildOverflowMenu(wrap, hidden);
 }
 
@@ -5175,7 +5209,14 @@ function applyBoardTitle() {
   if (!el || !state) return;
   if (el.dataset.editing === '1') return; // don't clobber mid-edit
   const t = cleanProjectTitle(state.title) || 'WorkBoard';
-  if (el.textContent !== t) {
+  // #857 — text equality alone isn't clean: a rich/multiline PASTE into the
+  // contenteditable title leaves <br>/span residue whose textContent EQUALS t,
+  // so it was never wiped — the title rendered two-line and the tab clamp
+  // measured a wrong rect until reload. Rewrite unless the DOM is already a
+  // single plain text node with the right text.
+  const dirty = el.textContent !== t ||
+                el.childElementCount > 0 || el.childNodes.length > 1;
+  if (dirty) {
     el.textContent = t;
     // #857 — the tab budget clamps at the centered title's left edge, so a title
     // width change moves that edge; re-measure or the clamp goes stale.
