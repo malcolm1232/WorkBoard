@@ -33,6 +33,7 @@ import _render   # noqa: E402  (shared markdown/html renderers — #115 export/w
 import _metrics  # noqa: E402  (velocity metrics — #114)
 
 from card_state import *  # noqa: E402,F401,F403  (shared toolkit)
+from card_state import build_card, unique_card_id  # noqa: E402,F401
 
 
 # ===== commands =====
@@ -44,13 +45,7 @@ def cmd_add(args, d, board):
         cid = args.id
     else:
         slug = slugify(args.code or args.title)
-        cid = f"c-{slug}"
-        # disambiguate if needed
-        if any(c.get("id") == cid for c in d["cards"]):
-            n = 2
-            while any(c.get("id") == f"{cid}-{n}" for c in d["cards"]):
-                n += 1
-            cid = f"{cid}-{n}"
+        cid = unique_card_id(d, f"c-{slug}")
 
     origin = maybe_stdin(args.origin, args.origin_stdin) or ""
     notes  = maybe_stdin(args.notes, args.notes_stdin)   or ""
@@ -103,31 +98,27 @@ def cmd_add(args, d, board):
         if target_col == "ideas":
             auto_card_col_created = _ensure_ideas_col(d)
 
-    card = {
-        "num": d["nextNum"],
-        "id": cid,
-        "code": args.code or "",
-        "priority": target_prio,
-        "title": args.title,
-        "column": target_col,
-        "tags": tags,
-        "origin": origin,
-        "notes": notes,
-        "writeup": writeup,
-        "createdAt": created,
-        "updatedAt": now,
-        "doneAt": created if target_col == "done" else None,
-        "lastTouchedSubtask": None,
-        "linkedCards": [],
-        "subtasks": [],
-    }
-    if auto_card:
-        card["meta"] = {
-            "autoCreated": True,
-            "autoSource": (getattr(args, "auto_source", None) or "").strip(),
-        }
-    d["cards"].append(card)
-    d["nextNum"] += 1
+    card = build_card(
+        d,
+        cid=cid,
+        title=args.title,
+        column=target_col,
+        code=args.code or "",
+        priority=target_prio,
+        tags=tags,
+        origin=origin,
+        notes=notes,
+        writeup=writeup,
+        created=created,
+        meta=(
+            {
+                "autoCreated": True,
+                "autoSource": (getattr(args, "auto_source", None) or "").strip(),
+            }
+            if auto_card
+            else None
+        ),
+    )
 
     for target_ref in (args.link or []):
         other = find_card(d, target_ref)

@@ -495,11 +495,70 @@ def new_subtask_id(card: dict) -> str:
         i += 1
 
 
+def unique_card_id(d: dict, base: str) -> str:
+    """Return `base`, or `base-2`, `base-3`, ... if it is already taken."""
+    taken = {c.get("id") for c in d.get("cards", [])}
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
+def build_card(
+    d: dict,
+    *,
+    title: str,
+    column: str,
+    cid: str | None = None,
+    code: str = "",
+    priority: str = "medium",
+    tags: list[str] | None = None,
+    origin: str = "",
+    notes: str = "",
+    writeup: str = "",
+    created: str | None = None,
+    meta: dict | None = None,
+) -> dict:
+    """Construct a card, append it to the board dict, bump nextNum, return it.
+
+    The single source of truth for the card schema. Does not save and does not
+    validate tags: tag policy belongs to the caller (see cmd_add._check_tags).
+    """
+    now = now_iso()
+    created = created or now
+    cid = unique_card_id(d, cid or f"c-{slugify(code or title)}")
+    card = {
+        "num": d["nextNum"],
+        "id": cid,
+        "code": code or "",
+        "priority": priority,
+        "title": title,
+        "column": column,
+        "tags": list(tags or []),
+        "origin": origin,
+        "notes": notes,
+        "writeup": writeup,
+        "createdAt": created,
+        "updatedAt": now,
+        "doneAt": created if column == "done" else None,
+        "lastTouchedSubtask": None,
+        "linkedCards": [],
+        "subtasks": [],
+    }
+    if meta:
+        card["meta"] = meta
+    d["cards"].append(card)
+    d["nextNum"] += 1
+    return card
+
+
 __all__ = [
     "find_board", "load", "_auth_headers", "_verify_port_owns_board",
     "_resolve_server_url", "_try_post_to_server", "_write_direct", "atomic_save",
     "find_card", "now_iso", "maybe_stdin", "slugify", "_taxonomy_names",
     "_check_tags", "_detect_urgency", "_ensure_super_urgent_col",
     "_ensure_ideas_col", "_log_auto_urgent", "find_subtask", "new_subtask_id",
-    "SKILL_DIR", "REGEN_SCRIPT", "_boardio",
+    "SKILL_DIR", "REGEN_SCRIPT", "_boardio", "unique_card_id", "build_card",
 ]
