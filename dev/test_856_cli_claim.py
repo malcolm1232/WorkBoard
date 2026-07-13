@@ -6,8 +6,11 @@ Run: python3 dev/test_856_cli_claim.py
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,10 +23,15 @@ os.environ["BOARD_INBOX"] = str(_STATE / "inbox.jsonl")
 os.environ["BOARD_TELEGRAM_CONFIG"] = str(_STATE / "telegram.json")
 os.environ["BOARD_ASSIGNMENTS"] = str(_STATE / "assignments.json")
 os.environ["BOARD_REGISTRY"] = str(_STATE / "registry.json")
+# Tests that exercise the REAL card_state.atomic_save (below) must never
+# probe real network ports looking for a board server - force the direct-
+# write path so they stay hermetic and fast.
+os.environ["BOARD_NO_SERVER"] = "1"
 Path(os.environ["BOARD_ASSIGNMENTS"]).write_text("{}")
 
 import _inbox  # noqa: E402
 import card_commands  # noqa: E402
+import card_state  # noqa: E402
 
 _fails = 0
 
@@ -150,10 +158,145 @@ def test_failed_save_releases_reservation():
           "a failed save releases the reservation so the item is claimable again")
 
 
+def test_reserved_conflict_wording_distinguishes_from_claimed():
+    """#856 review MINOR 3 - a concurrent in-flight reservation must not be
+    reported as "already claimed" (untrue: e.claim is None for a reserve-only
+    conflict)."""
+    print("reserved-but-not-claimed conflict is worded differently from claimed")
+    reset_inbox()
+    board, d = mk_board()
+    it = _inbox.append("in flight", update_id=910)
+
+    # Simulate a concurrent claimer that reserved but hasn't finalized yet.
+    _inbox.reserve(it["tid"])
+
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            card_commands.cmd_claim(argparse.Namespace(tid=it["tid"], column=None, ref=it["tid"]), d, board)
+        check(False, "claiming a reserved (not yet claimed) item must fail")
+    except SystemExit as e:
+        msg = str(e)
+        check("already claimed" not in msg, f"does not falsely say 'already claimed': {msg!r}")
+        check("reserved" in msg, f"names the real status (reserved): {msg!r}")
+
+
+def test_regen_failure_does_not_fail_atomic_save():
+    """#856 review CRITICAL 1(a) - a regen subprocess timeout/failure must not
+    propagate out of atomic_save once the board write itself has landed."""
+    print("atomic_save tolerates a hung/failing regen_index subprocess")
+    board, d = mk_board()
+
+    real_run = card_state.subprocess.run
+
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="regen_index.py", timeout=10)
+
+    card_state.subprocess.run = boom
+    try:
+        rev = card_state.atomic_save(board, dict(d))
+    finally:
+        card_state.subprocess.run = real_run
+
+    check(rev == 2, "atomic_save returns the new rev instead of raising")
+    on_disk = json.loads(board.read_text())
+    check(on_disk["rev"] == 2, "the board write landed on disk despite the regen failure")
+
+
+def test_regen_failure_during_claim_no_duplicate_on_retry():
+    """#856 review CRITICAL 1 end-to-end: a regen failure during `claim` must
+    not release the reservation, so a human retry can never create a second
+    card for the same capture."""
+    print("regen failure during claim: reservation held, retry refused, no duplicate card")
+    reset_inbox()
+    board, d = mk_board()
+    it = _inbox.append("dup risk", update_id=911)
+
+    real_run = card_state.subprocess.run
+
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="regen_index.py", timeout=10)
+
+    card_state.subprocess.run = boom
+    try:
+        card_commands.cmd_claim(argparse.Namespace(tid=it["tid"], column=None, ref=it["tid"]), d, board)
+    finally:
+        card_state.subprocess.run = real_run
+
+    on_disk = json.loads(board.read_text())
+    check(len(on_disk["cards"]) == 1, "exactly one card exists after the regen failure")
+    item = _inbox.get(it["tid"])
+    check(item["status"] == "claimed", "the item is marked claimed (reservation not stranded/released)")
+
+    # The obvious human retry: claiming the same tid again must be refused,
+    # not silently create a second card.
+    try:
+        card_commands.cmd_claim(argparse.Namespace(tid=it["tid"], column=None, ref=it["tid"]), d, board)
+        check(False, "retrying an already-claimed tid must fail")
+    except SystemExit:
+        check(True, "retry correctly refused")
+
+    on_disk_after = json.loads(board.read_text())
+    check(len(on_disk_after["cards"]) == 1, "still exactly one card after the retry attempt")
+
+
+def test_finalize_failure_keeps_card_no_crash_prints_line_first():
+    """#856 review CRITICAL 1(b): a `finalize` failure AFTER a successful save
+    must not crash cmd_claim, must not release the reservation, must still
+    print the poller's '+ #<num>' line, and must exit non-zero."""
+    print("finalize failure after save: card kept, no crash, poller line first, exit non-zero")
+    reset_inbox()
+    board, d = mk_board()
+    it = _inbox.append("finalize boom", update_id=912)
+
+    real_finalize = _inbox.finalize
+
+    def boom_finalize(*a, **kw):
+        raise TimeoutError("inbox lock busy")
+
+    _inbox.finalize = boom_finalize
+
+    saved = {}
+    real_save = card_commands.atomic_save
+    card_commands.atomic_save = patched_save(saved)
+
+    buf = io.StringIO()
+    exit_code = "not-raised"
+    try:
+        with contextlib.redirect_stdout(buf):
+            try:
+                card_commands.cmd_claim(
+                    argparse.Namespace(tid=it["tid"], column=None, ref=it["tid"]), d, board
+                )
+            except SystemExit as e:
+                exit_code = e.code
+    finally:
+        _inbox.finalize = real_finalize
+        card_commands.atomic_save = real_save
+
+    check(exit_code not in (0, None, "not-raised"),
+          f"cmd_claim exits non-zero and does not raise an uncaught exception (got {exit_code!r})")
+
+    out_lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+    check(bool(out_lines) and out_lines[0].startswith("+ #"),
+          f"the poller's '+ #<num>' line is still printed, first: {out_lines[:1]!r}")
+
+    check(bool(saved.get("d")) and len(saved["d"]["cards"]) == 1,
+          "the card was actually saved and survives the finalize failure")
+
+    item = _inbox.get(it["tid"])
+    check(item["status"] == "reserved",
+          "the reservation is NOT released after a successful save, even though finalize failed")
+
+
 if __name__ == "__main__":
     test_claim_creates_card_and_marks_item()
     test_claim_respects_explicit_column()
     test_double_claim_rejected()
     test_failed_save_releases_reservation()
+    test_reserved_conflict_wording_distinguishes_from_claimed()
+    test_regen_failure_does_not_fail_atomic_save()
+    test_regen_failure_during_claim_no_duplicate_on_retry()
+    test_finalize_failure_keeps_card_no_crash_prints_line_first()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

@@ -1623,8 +1623,17 @@ def cmd_claim(args, d, board):
     atomic CAS that makes a double-claim impossible: it raises InboxConflict
     if the item is already reserved/claimed by someone else, and this never
     falls back to silently creating a second card. If the board save fails
-    after reserving, the reservation is released so the item stays claimable
-    (no stranded reservation).
+    (before it has landed), the reservation is released so the item stays
+    claimable (no stranded reservation).
+
+    #856 review CRITICAL 1 — the rollback is scoped precisely: only a failure
+    of build_card/atomic_save may release the reservation. Once atomic_save
+    has returned, the card is durable, and the reservation is NEVER released
+    again - not even if `finalize` itself fails - because releasing it would
+    let a human retry create a second card for the same capture. A finalize
+    failure instead prints a warning naming the created card and exits
+    non-zero, without crashing, so the operator knows the item may reappear
+    in the inbox instead of silently losing track of it.
     """
     import _inbox
     import _tg_config as cfg
@@ -1637,9 +1646,15 @@ def cmd_claim(args, d, board):
     try:
         item = _inbox.reserve(tid)
     except _inbox.InboxConflict as e:
-        claim = e.claim or {}
-        where = f" -> {claim.get('board')} #{claim.get('cardNum')}" if claim else ""
-        sys.exit(f"error: {tid} is already claimed{where}")
+        claim = e.claim
+        if claim:
+            sys.exit(f"error: {tid} is already claimed -> "
+                      f"{claim.get('board')} #{claim.get('cardNum')}")
+        # Not yet claimed by anyone - e.g. a concurrent in-flight reservation,
+        # or a discarded item. `e` already carries the accurate status from
+        # _inbox (reserve()'s own conflict message), so surface it verbatim
+        # rather than mislabeling every non-claimed conflict as "claimed".
+        sys.exit(f"error: {e}")
 
     token = item["reserveToken"]
     col = args.column or cfg.task_column(d)
@@ -1664,23 +1679,50 @@ def cmd_claim(args, d, board):
         _inbox.release(tid, token)  # never strand a reservation
         raise
 
-    _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"], token=token)
-    _inbox.notify_boards()
-    # The poller anchors `^\+\s*#(\d+)` on this line (telegram_poller._claim_hint)
-    # to echo the new card number back to the phone - keep this exact shape.
+    # From here on the card is durable (atomic_save returned) - the
+    # reservation must NEVER be released again. Print the poller's line
+    # FIRST, before finalize runs, so telegram_poller._claim_hint (which
+    # anchors `^\+\s*#(\d+)`) can always parse the card number even if
+    # finalize below fails.
     print(f"+ #{card['num']} {card['title'][:50]} -> {col}  (rev {rev}, from telegram {tid})")
 
+    try:
+        _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"], token=token)
+        _inbox.notify_boards()
+    except Exception as e:
+        print(f"warning: card #{card['num']} was created but {tid} could not be marked "
+              f"claimed ({e}); it may reappear in the inbox - if it does, claiming it again "
+              f"will create a duplicate card, so check first before re-claiming.",
+              file=sys.stderr)
+        sys.exit(1)
 
-def cmd_telegram_setup(args):
+
+def cmd_telegram_setup(args, api=None):
     """One-time wizard: connect a Telegram bot to this machine. Board-less
-    (like board-new): dispatched in main() before find_board() runs."""
+    (like board-new): dispatched in main() before find_board() runs.
+
+    #856 review IMPORTANT 2 — nothing is persisted until the token is
+    validated AND the chat id is known. The token is validated by calling
+    the Telegram API directly (no save needed to do that); the config is
+    written exactly ONCE, after both checks pass, and preserves any
+    existing custom aliases. A failed run (network error, rejected token,
+    or the very common first-run "no message seen yet") must leave any
+    config already on disk byte-for-byte unchanged - a wizard interrupted
+    at that stage would otherwise wipe a user's `telegram-alias` entries
+    and, via chat_id=0, even make `cfg.load()` report "unconfigured".
+
+    `api` mirrors telegram_poller.poll()'s injectable-api convention (tests
+    pass a fake instead of hitting the real Telegram API).
+    """
     import _tg_config as cfg
     import telegram_poller
 
+    api = api or telegram_poller._api
+
     # Preserve any existing custom aliases across a re-run (e.g. rotating the
-    # bot token): the final save() below writes a whole new config object, so
-    # without this a re-setup would silently wipe out aliases the user set
-    # with `card.py telegram-alias`.
+    # bot token): the single save() below writes a whole new config object,
+    # so without this a re-setup would wipe out aliases the user set with
+    # `card.py telegram-alias`.
     existing = cfg.load() or {}
 
     print("Telegram capture setup")
@@ -1693,9 +1735,8 @@ def cmd_telegram_setup(args):
     print("  3. Now open your new bot in Telegram and send it any message (e.g. hi).")
     input("     Press Enter once you have sent it: ")
 
-    cfg.save({"token": token, "chat_id": 0, "offset": 0})
     try:
-        resp = telegram_poller._api(token, "getUpdates", {"offset": 0, "timeout": 0}, 10)
+        resp = api(token, "getUpdates", {"offset": 0, "timeout": 0}, 10)
     except Exception as e:
         sys.exit(f"error: could not reach Telegram: {e}")
     if not resp.get("ok"):
@@ -1711,6 +1752,7 @@ def cmd_telegram_setup(args):
 
     chat_id = chats[-1]
     offset = max(u["update_id"] for u in resp["result"]) + 1
+    # The one and only write - token validated, chat id known.
     cfg.save({
         "token": token, "chat_id": chat_id, "offset": offset,
         "aliases": existing.get("aliases") or {}, "status": None,

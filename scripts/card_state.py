@@ -240,6 +240,15 @@ def atomic_save(p: Path, d: dict, regen: bool = True) -> int:
     self-locking only the write would still clobber a writer that bumped the rev in
     the gap. The CAS closes that — on mismatch it raises BoardConflict, which
     main()'s retry loop reloads + retries on.
+
+    #856 review CRITICAL 1 — the regen subprocess below is best-effort ONLY. By
+    the time it runs, the board write has already landed durably (POST accepted,
+    or _write_direct + backup completed). A slow/hung/failing regen must never
+    make this look like a failed save: a caller that rolls back on any exception
+    from atomic_save (e.g. cmd_claim releasing an inbox reservation) would then
+    roll back an action whose effect is already permanent, and a retry would
+    create a duplicate. So a regen failure is caught, warned on stderr, and
+    swallowed — only a failure of the WRITE itself (above) still raises/exits.
     """
     base_rev = d.get("rev", 0)          # #609 — the rev we loaded; sent for CAS
     d["rev"] = base_rev + 1
@@ -270,10 +279,18 @@ def atomic_save(p: Path, d: dict, regen: bool = True) -> int:
             _assert_base_rev(p, base_rev)
             _write_direct(p, data)
     if regen and REGEN_SCRIPT.exists():
-        subprocess.run(
-            [sys.executable, str(REGEN_SCRIPT), str(p)],
-            capture_output=True, timeout=10, check=False,
-        )
+        try:
+            subprocess.run(
+                [sys.executable, str(REGEN_SCRIPT), str(p)],
+                capture_output=True, timeout=10, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            # The board write above already landed durably — never let a
+            # slow/hung/failing regen turn a successful save into a raised
+            # exception. See the #856 review note on this function.
+            print(f"warning: regen_index failed after the board write landed "
+                  f"({e}); index.json may be stale until the next successful "
+                  f"save/regen", file=sys.stderr)
     return d["rev"]
 
 
