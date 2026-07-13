@@ -396,6 +396,8 @@ def build_parser():
 
     pts = sub.add_parser("telegram-setup", help="connect a Telegram bot for phone capture")
     pts.add_argument("--token", help="bot token (otherwise prompted)")
+    pts.add_argument("--uninstall", action="store_true",
+                      help="remove the background poller job (the bot itself stays in Telegram)")
     pts.set_defaults(fn=cmd_telegram_setup)
 
     pta = sub.add_parser("telegram-alias", help="set a short #alias for a board")

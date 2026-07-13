@@ -367,16 +367,47 @@ def notify_boards() -> None:
             continue  # board down or busy: it will pick the change up on next fetch
 
 
+def _tg_status_line() -> str:
+    """Warn when the Telegram poller is failing (e.g. a revoked/rotated bot
+    token) - the state where captures silently stop arriving forever unless
+    someone is told (#856 review IMPORTANT 1).
+
+    Best-effort and soft-dependent on _tg_config: that module lives beside
+    this one but is a separate feature surface, so an environment missing it
+    (or with no bot ever configured) must degrade to no warning, never an
+    import error or traceback out of --hook-line.
+    """
+    try:
+        import _tg_config
+    except Exception:
+        return ""
+    try:
+        conf = _tg_config.load()
+    except Exception:
+        return ""
+    status = (conf or {}).get("status")
+    if not status:
+        return ""
+    return (
+        f"⚠ TELEGRAM CAPTURE BROKEN: {status} - captures have stopped arriving "
+        f"from every board. Re-run `card.py telegram-setup` to reconnect."
+    )
+
+
 def _hook_line() -> str:
     c = counts()
-    if not c["unclaimed"]:
-        return ""
-    age = c["oldest_age_days"] or 0
-    oldest = f", oldest {age:.0f}d" if age >= 1 else ""
-    return (
-        f"CAPTURES: {c['unclaimed']} unclaimed from Telegram{oldest} - they sit in the "
-        f"From Telegram column on every board; claim with `card.py claim <T-n>` or by dragging."
-    )
+    cap_line = ""
+    if c["unclaimed"]:
+        age = c["oldest_age_days"] or 0
+        oldest = f", oldest {age:.0f}d" if age >= 1 else ""
+        cap_line = (
+            f"CAPTURES: {c['unclaimed']} unclaimed from Telegram{oldest} - they sit in the "
+            f"From Telegram column on every board; claim with `card.py claim <T-n>` or by dragging."
+        )
+    # The status warning must surface EVEN WITH ZERO unclaimed captures - that
+    # is exactly the broken state (nothing is arriving, so cap_line is empty).
+    warn_line = _tg_status_line()
+    return "\n".join(line for line in (cap_line, warn_line) if line)
 
 
 if __name__ == "__main__":

@@ -54,6 +54,31 @@ def install_poller() -> None:
     )
 
 
+def uninstall_poller() -> None:
+    """Remove the 15-minute Telegram capture job for this platform (#856
+    review MINOR 4). Mirrors install_poller's dispatch exactly, so a platform
+    that can install the job can always also remove it.
+
+    Does not touch _tg_config - the saved token/aliases are unaffected, only
+    the OS-level scheduled job goes away.
+    """
+    if sys.platform == "darwin":
+        import install_launchd
+
+        install_launchd.uninstall_poller()
+        return
+    if sys.platform.startswith("linux"):
+        import install_systemd
+
+        install_systemd.uninstall_poller()
+        return
+    poller = Path(__file__).resolve().parent / "telegram_poller.py"
+    raise RuntimeError(
+        f"no scheduler integration for {sys.platform}; remove any manual schedule you set "
+        f"for: python3 {poller}"
+    )
+
+
 def main() -> None:
     script = pick_installer()
     target = Path(__file__).resolve().parent / script

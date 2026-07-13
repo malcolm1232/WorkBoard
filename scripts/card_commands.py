@@ -1785,6 +1785,26 @@ def cmd_claim(args, d, board):
         sys.exit(1)
 
 
+def _cmd_telegram_uninstall() -> None:
+    """#856 review MINOR 4 — remove the background 15-minute poller job.
+
+    This only removes the LOCAL scheduled job (the launchd plist / systemd
+    service+timer). It cannot and does not delete the Telegram bot itself -
+    that lives on Telegram's servers under the user's BotFather account, out
+    of reach of this machine - so we say so explicitly rather than implying
+    a full teardown.
+    """
+    try:
+        import install_autostart
+
+        install_autostart.uninstall_poller()
+        print("Background poller removed - captures will no longer be pulled every 15 minutes.")
+    except Exception as e:
+        print(f"warning: could not remove the background poller automatically ({e}).")
+    print("Note: the bot itself still exists in Telegram (message @BotFather to delete it) - "
+          "this only removed the local scheduled job.")
+
+
 def cmd_telegram_setup(args, api=None):
     """One-time wizard: connect a Telegram bot to this machine. Board-less
     (like board-new): dispatched in main() before find_board() runs.
@@ -1801,7 +1821,15 @@ def cmd_telegram_setup(args, api=None):
 
     `api` mirrors telegram_poller.poll()'s injectable-api convention (tests
     pass a fake instead of hitting the real Telegram API).
+
+    --uninstall (#856 review MINOR 4) short-circuits into `_cmd_telegram_uninstall`
+    before any of the above: it only removes the local scheduled job, it does
+    not touch the saved config (a re-run of plain `telegram-setup` should still
+    work without re-pasting the token) and never talks to Telegram.
     """
+    if getattr(args, "uninstall", False):
+        return _cmd_telegram_uninstall()
+
     import _tg_config as cfg
     import telegram_poller
 
@@ -1852,7 +1880,12 @@ def cmd_telegram_setup(args, api=None):
 
         install_autostart.install_poller()
         print("  background poller installed (every 15 minutes)")
-    except Exception as e:
+    except (Exception, SystemExit) as e:
+        # #856 review MINOR 3 — find_python() (called deep inside the platform
+        # installers) raises via sys.exit() when python3 isn't on PATH, which
+        # is a SystemExit, not an Exception. A bare `except Exception` let that
+        # escape and abort the whole wizard right after the config was safely
+        # written, instead of degrading to this manual-scheduling fallback.
         print(f"  note: could not install the background poller automatically ({e}).")
         print(f"  Run it manually any time with: python3 {Path(__file__).parent / 'telegram_poller.py'}")
 

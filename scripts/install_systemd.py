@@ -64,9 +64,14 @@ def build_unit(serve_py: Path, project: Path, port: int) -> str:
 POLLER_UNIT = "boardsteward-telegram"
 
 
-def install_poller() -> None:
-    """A oneshot service plus a 15-minute timer."""
-    unit_dir = Path.home() / ".config" / "systemd" / "user"
+def install_poller(unit_dir: Path | None = None) -> None:
+    """A oneshot service plus a 15-minute timer.
+
+    `unit_dir` defaults to the real per-user systemd dir; tests override it
+    to a throwaway directory so they never write into the user's real
+    ~/.config/systemd/user (#856 review IMPORTANT 2 / poller-job coverage).
+    """
+    unit_dir = unit_dir or UNIT_DIR
     unit_dir.mkdir(parents=True, exist_ok=True)
     poller_py = Path(__file__).resolve().parent / "telegram_poller.py"
 
@@ -90,6 +95,21 @@ def install_poller() -> None:
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", f"{POLLER_UNIT}.timer"],
                    capture_output=True)
+
+
+def uninstall_poller(unit_dir: Path | None = None) -> None:
+    """Stop, disable, and remove the poller's service + timer units (#856
+    review MINOR 4). Same `unit_dir` override as install_poller, for tests."""
+    unit_dir = unit_dir or UNIT_DIR
+    subprocess.run(["systemctl", "--user", "disable", "--now", f"{POLLER_UNIT}.timer"],
+                   capture_output=True)
+    subprocess.run(["systemctl", "--user", "stop", f"{POLLER_UNIT}.service"],
+                   capture_output=True)
+    for suffix in (".service", ".timer"):
+        p = unit_dir / f"{POLLER_UNIT}{suffix}"
+        if p.exists():
+            p.unlink()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
 
 
 def _systemctl(*args: str) -> subprocess.CompletedProcess:
