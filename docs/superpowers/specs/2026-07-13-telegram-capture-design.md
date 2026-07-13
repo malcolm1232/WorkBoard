@@ -23,7 +23,8 @@ Today the only path is "remember it until you are back at the laptop", which los
 - LLM enrichment of captures at capture time (raw cards only; the user chose "raw card, work later").
 - Auto-suggesting claims at session start (revisit after manual claiming has been lived with).
 - Remote claim from the phone (replying "-> qm" to route a message later).
-- Channels other than Telegram (WhatsApp requires Meta business + webhook server; iMessage has no API).
+- Channels other than Telegram. WhatsApp is explicitly rejected: the official Cloud API is webhook-only (needs a public HTTPS server, a verified Meta Business and a dedicated number), and the unofficial web-puppeting libraries violate ToS and risk banning the user's personal account. Email (IMAP) and Discord both fit the pull model and stay $0, so they remain viable later adapters.
+- The architecture keeps this cheap: the channel is confined to the poller. Everything downstream (inbox format, virtual column, claiming, aliases) is channel-agnostic, so a second channel is a new ~50-line poller writing the same inbox lines, with zero changes on the board side. Ship Telegram first; add a channel only when a real user needs one.
 
 ## Key decisions
 
