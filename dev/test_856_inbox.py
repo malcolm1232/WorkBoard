@@ -313,6 +313,46 @@ def test_stale_takeover_cannot_produce_two_claims():
     check(final["claim"]["cardNum"] == 222, "the one true claim carries B's card number")
 
 
+def test_confirmation_tracking():
+    print("confirmed field + mark_confirmed + unconfirmed()")
+    reset()
+    a = _inbox.append("a", update_id=1100)
+    b = _inbox.append("b", update_id=1101)
+    check(a["confirmed"] is False, "append starts an item unconfirmed")
+    check({i["tid"] for i in _inbox.unconfirmed()} == {a["tid"], b["tid"]},
+          "both fresh items are unconfirmed")
+
+    confirmed_a = _inbox.mark_confirmed(a["tid"])
+    check(confirmed_a["confirmed"] is True, "mark_confirmed returns the updated item")
+    check(_inbox.get(a["tid"])["confirmed"] is True, "mark_confirmed persists to disk")
+    check([i["tid"] for i in _inbox.unconfirmed()] == [b["tid"]],
+          "a confirmed item drops out of unconfirmed(), the other remains")
+
+    try:
+        _inbox.mark_confirmed("T-does-not-exist")
+        check(False, "mark_confirmed on an unknown tid must raise")
+    except KeyError:
+        check(True, "mark_confirmed on an unknown tid raises KeyError")
+
+    # Confirmation is orthogonal to the claim lifecycle: a claimed item can
+    # still be (un)confirmed independently.
+    reserved_b = _inbox.reserve(b["tid"])
+    _inbox.finalize(b["tid"], board="/board-b", card_num=9, token=reserved_b["reserveToken"])
+    check(_inbox.get(b["tid"])["status"] == "claimed", "b is claimed")
+    check([i["tid"] for i in _inbox.unconfirmed()] == [b["tid"]],
+          "a claimed-but-unconfirmed item still surfaces in unconfirmed()")
+    _inbox.mark_confirmed(b["tid"])
+    check(_inbox.unconfirmed() == [], "both items confirmed: unconfirmed() is empty")
+    check(_inbox.get(b["tid"])["status"] == "claimed", "confirming does not disturb claim status")
+
+    c = _inbox.append("c", update_id=1102)
+    reserved_c = _inbox.reserve(c["tid"])
+    check(bool(reserved_c.get("reserveToken")), "c is reserved and holds a token in storage")
+    unconfirmed_c = next(i for i in _inbox.unconfirmed() if i["tid"] == c["tid"])
+    check("reserveToken" not in unconfirmed_c,
+          "unconfirmed() strips reserveToken before it reaches a browser, like unclaimed() does")
+
+
 def test_notify_boards_never_raises():
     print("notify_boards never raises when nothing is listening")
     reset()
@@ -345,6 +385,7 @@ if __name__ == "__main__":
     test_wrong_state_transitions_conflict()
     test_duplicate_claim_regression()
     test_stale_takeover_cannot_produce_two_claims()
+    test_confirmation_tracking()
     test_notify_boards_never_raises()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

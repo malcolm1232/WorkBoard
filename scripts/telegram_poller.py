@@ -14,6 +14,8 @@ This file is the only place that knows Telegram exists. Everything downstream
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import re
 import subprocess
@@ -30,7 +32,11 @@ import _tg_config as cfg  # noqa: E402
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 CARD_PY = Path(__file__).resolve().parent / "card.py"
-_NUM_RE = re.compile(r"#(\d+)")
+# Anchored to the start of a line: card.py claim prints "+ #431 <title> -> <col> ...",
+# and a title could itself contain "#12" - searching the whole blob would grab that
+# instead. The real card number is always the first thing on a "+ #N" line.
+_NUM_RE = re.compile(r"^\+\s*#(\d+)", re.MULTILINE)
+_CLAIM_TIMEOUT = 30.0  # overridable by tests so a hung claim script doesn't stall the suite
 
 
 def _api(token: str, method: str, params: dict, timeout: float) -> dict:
@@ -55,18 +61,57 @@ def _claim_hint(item: dict) -> str | None:
         r = subprocess.run(
             [sys.executable, str(CARD_PY), "--board", str(Path(board) / "board.json"),
              "claim", item["tid"]],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=_CLAIM_TIMEOUT,
         )
     except Exception:
-        return None
+        return None  # non-zero exit, a hang cut off by the timeout, or any other failure to run
     if r.returncode != 0:
         return None
     m = _NUM_RE.search(r.stdout)
     return f"saved -> {item['routeHint']} #{m.group(1)}" if m else "saved"
 
 
+def _lock_path() -> Path:
+    return cfg.config_path().with_suffix(cfg.config_path().suffix + ".lock")
+
+
+@contextlib.contextmanager
+def _single_instance():
+    """Non-blocking flock so two overlapping pollers never run at once.
+
+    A slow session-start catch-up can overlap a scheduled 15-minute tick.
+    Both would race `_tg_config.set_offset`, which has no lock of its own.
+    Duplicate captures are already impossible (the inbox dedupes on
+    update_id), but there is no reason to let a second poller do any work
+    at all: it exits silently, yielding False, and the caller returns [].
+    """
+    lp = _lock_path()
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    fh = lp.open("a+")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
 def poll(api=None, timeout: float = 10.0) -> list[dict]:
     """One capture cycle. Returns the newly captured items."""
+    with _single_instance() as acquired:
+        if not acquired:
+            return []  # another poller is already running: don't race it
+        return _poll_locked(api, timeout)
+
+
+def _poll_locked(api, timeout: float) -> list[dict]:
     api = api or _api
     conf = cfg.load()
     if not conf:
@@ -81,21 +126,33 @@ def poll(api=None, timeout: float = 10.0) -> list[dict]:
             cfg.set_status("Telegram token invalid or revoked - re-run `card.py telegram-setup`")
         return []
     except Exception:
-        return []  # network down: offset untouched, the next tick retries
+        return []  # network down (incl. 429/500): offset untouched, the next tick retries
 
-    if not resp.get("ok"):
+    # Telegram (or an intermediary) can return {"ok": true, "result": null} or
+    # result as a dict/string/int. Validate the whole shape before iterating -
+    # anything unexpected is a no-op, exactly like the other malformed-response
+    # branches above, rather than an uncaught TypeError that kills the
+    # unattended run.
+    if not isinstance(resp, dict) or not resp.get("ok"):
         return []
     if conf.get("status"):
         cfg.set_status(None)  # recovered
+    result = resp.get("result")
+    if not isinstance(result, list):
+        return []
 
     new: list[dict] = []
     max_uid = offset - 1
-    for u in resp.get("result", []):
+    for u in result:
+        if not isinstance(u, dict):
+            continue  # malformed entry: skip, don't raise
         uid = u.get("update_id")
         if uid is None:
             continue
         max_uid = max(max_uid, uid)
-        msg = u.get("message") or u.get("channel_post") or {}
+        msg = u.get("message") or u.get("channel_post")
+        if not isinstance(msg, dict):
+            continue  # no message/channel_post, or not shaped like one: skip
         if str(msg.get("chat", {}).get("id")) != str(chat_id):
             continue  # allowlist: anyone can find a bot, only the owner may feed the board
         text = (msg.get("text") or msg.get("caption") or "").strip()
@@ -105,15 +162,24 @@ def poll(api=None, timeout: float = 10.0) -> list[dict]:
         if item:
             new.append(item)
 
-    for item in new:
+    if max_uid >= offset:
+        cfg.set_offset(max_uid + 1)  # only now: every inbox write above has landed
+
+    # Confirmation is a durable fact on the item, not an accident of loop
+    # ordering: this sends to every unconfirmed item, which naturally covers
+    # both what was just captured AND anything stranded unconfirmed by an
+    # earlier failed tick (e.g. the inbox write for a later item in the same
+    # batch raised before any reply went out). mark_confirmed only after the
+    # reply actually sends, so a sendMessage failure leaves the capture
+    # intact and simply retries next tick - never lost, never duplicated.
+    for item in _inbox.unconfirmed():
         reply = _claim_hint(item) or "saved"
         try:
             api(token, "sendMessage", {"chat_id": chat_id, "text": reply}, timeout)
         except Exception:
-            pass  # the capture landed; a failed confirmation must not lose it
+            continue  # the capture landed; a failed confirmation must not lose it
+        _inbox.mark_confirmed(item["tid"])
 
-    if max_uid >= offset:
-        cfg.set_offset(max_uid + 1)  # only now: every inbox write above has landed
     if new:
         _inbox.notify_boards()
     return new

@@ -149,6 +149,7 @@ def append(text: str, update_id: int, ts: str | None = None) -> dict | None:
             "status": "unclaimed",
             "claim": None,
             "reserveToken": None,
+            "confirmed": False,
         }
         items.append(item)
         _write(items)
@@ -177,6 +178,38 @@ def _for_browser(item: dict) -> dict:
 
 def unclaimed() -> list[dict]:
     return [_for_browser(i) for i in _read() if _is_free(i)]
+
+
+def unconfirmed() -> list[dict]:
+    """Captured items whose phone confirmation reply has not been sent yet.
+
+    Confirmation is tracked as a durable fact on the item, not as a side
+    effect of loop ordering: this covers both items captured this tick and
+    any item stranded unconfirmed by an earlier failed tick (e.g. a second
+    append in the same batch raised, or a sendMessage reply failed). The
+    poller retries every item this returns, every tick, until each is
+    marked confirmed - so a capture can never be silently lost from the
+    user's point of view, and never confirmed twice either since the
+    poller calls `mark_confirmed` only after the reply actually lands.
+    """
+    return [_for_browser(i) for i in _read() if not i.get("confirmed", False)]
+
+
+def mark_confirmed(tid: str) -> dict:
+    """Stamp confirmed=True on an item, once its reply has actually been sent.
+
+    Flock-guarded like the other mutators, but not gated on current status:
+    confirmation is orthogonal to the claim lifecycle (an item can be
+    confirmed before, during, or after being claimed), so there is no
+    predicate to fail on - only the poller calls this, at most once per
+    successful sendMessage.
+    """
+    return _mutate_if(
+        tid,
+        lambda i: True,
+        lambda i: dict(i, confirmed=True),
+        lambda i: "unreachable",
+    )
 
 
 def counts() -> dict:
