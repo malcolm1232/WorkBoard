@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import time
 import urllib.request
 from contextlib import contextmanager
@@ -31,6 +32,7 @@ STALE_RESERVE_S = 120
 
 _URL_RE = re.compile(r"https?://\S+")
 _HINT_RE = re.compile(r"^#([A-Za-z0-9_-]{1,32})\s+(.+)$", re.S)
+_TID_RE = re.compile(r"^T-(\d+)$")
 
 
 class InboxConflict(Exception):
@@ -79,21 +81,36 @@ def _now() -> str:
 
 
 def _read() -> list[dict]:
-    """All items, corrupt lines skipped."""
+    """All items, corrupt lines skipped.
+
+    A skipped line is a real data-loss event (#856 review IMPORTANT 4): the
+    next `_write()` rewrites the file from the survivors only, so a corrupt
+    or unparseable line silently disappears from the audit trail. That loss
+    must be LOUD, not silent, so it lands on stderr rather than vanishing -
+    the caller (poller, CLI, server) still degrades gracefully (the corrupt
+    line is skipped either way), but an operator tailing logs has a chance
+    to notice and recover the raw file before the next write clobbers it."""
     p = path()
     if not p.exists():
         return []
     items: list[dict] = []
-    for line in p.read_text(errors="replace").splitlines():
-        line = line.strip()
+    for lineno, raw_line in enumerate(p.read_text(errors="replace").splitlines(), start=1):
+        line = raw_line.strip()
         if not line:
             continue
         try:
             obj = json.loads(line)
         except Exception:
+            print(f"warning: inbox line {lineno} is not valid JSON, skipping "
+                  f"(will be dropped from the file on the next write): {line[:80]!r}",
+                  file=sys.stderr)
             continue  # corrupt line: skip, keep the rest
         if isinstance(obj, dict) and obj.get("tid"):
             items.append(obj)
+        else:
+            print(f"warning: inbox line {lineno} is valid JSON but not a "
+                  f"well-formed item (missing tid), skipping: {line[:80]!r}",
+                  file=sys.stderr)
     return items
 
 
@@ -131,6 +148,24 @@ def parse(text: str) -> tuple[str, str | None, str]:
     return title, hint, (url_m.group(0) if url_m else "")
 
 
+def _next_tid(items: list[dict]) -> str:
+    """Allocate a tid past the highest numeric suffix actually IN USE.
+
+    NOT `len(items) + 1` (#856 review IMPORTANT 4): `_read()` skips
+    corrupt/unparseable lines, so `len(items)` under-counts as soon as any
+    line is lost - e.g. T-1..T-5 on disk with T-3 corrupt reads back as 4
+    items, and `len+1` mints a NEW T-5, colliding with the surviving one.
+    Scanning for the max existing "T-<n>" suffix is immune to holes: it
+    only ever hands out a number strictly greater than every tid actually
+    present, corrupt lines or not."""
+    max_n = 0
+    for i in items:
+        m = _TID_RE.match(str(i.get("tid", "")))
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return f"T-{max_n + 1}"
+
+
 def append(text: str, update_id: int, ts: str | None = None) -> dict | None:
     """Add a captured message. Returns None if update_id was already captured."""
     with _locked():
@@ -139,7 +174,7 @@ def append(text: str, update_id: int, ts: str | None = None) -> dict | None:
             return None  # at-least-once delivery: a redelivered update is a no-op
         title, hint, url = parse(text)
         item = {
-            "tid": f"T-{len(items) + 1}",
+            "tid": _next_tid(items),
             "update_id": update_id,
             "text": text,
             "title": title,
@@ -339,8 +374,20 @@ def discard(tid: str) -> dict:
     )
 
 
-def notify_boards() -> None:
-    """Best-effort: tell every live board server the inbox changed. Never raises."""
+def notify_boards(skip_port: int | None = None) -> None:
+    """Best-effort: tell every live board server the inbox changed. Never raises.
+
+    This is the ONLY cross-process fanout for the inbox (#856 review CRITICAL
+    1): a board that claims or discards an item over HTTP must reach every
+    OTHER board process too, not just its own SSE clients, or the "From
+    Telegram" virtual column silently disagrees across open boards until a
+    stray poll or focus event happens to refetch.
+
+    `skip_port` lets a caller that already broadcast the update to its own
+    in-process SSE clients (a direct `broadcast()` call, no network hop
+    needed) avoid ALSO looping the same update back to itself via a
+    self-POST - so its own clients get exactly one update, and every other
+    live board gets exactly one too."""
     try:
         import port_registry
     except Exception:
@@ -353,7 +400,7 @@ def notify_boards() -> None:
         return
     for entry in live.values():
         port = entry.get("port")
-        if not port:
+        if not port or port == skip_port:
             continue
         try:
             req = urllib.request.Request(

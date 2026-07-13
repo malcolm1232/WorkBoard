@@ -155,7 +155,15 @@ def _poll_locked(api, timeout: float) -> list[dict]:
         msg = u.get("message") or u.get("channel_post")
         if not isinstance(msg, dict):
             continue  # no message/channel_post, or not shaped like one: skip
-        if str(msg.get("chat", {}).get("id")) != str(chat_id):
+        chat = msg.get("chat")
+        if not isinstance(chat, dict) or str(chat.get("id")) != str(chat_id):
+            # Guarded like every other field in this loop (#856 review MINOR 5):
+            # `msg.get("chat", {})` only supplies the {} default when the key is
+            # ABSENT. A malformed payload where "chat" is present but not a dict
+            # (e.g. a string or null) made `.get("id")` raise AttributeError,
+            # which escaped poll() entirely - cfg.set_offset was never reached,
+            # so Telegram redelivered the same bad update forever and the
+            # poller was wedged permanently. Treat it as a no-op instead.
             continue  # allowlist: anyone can find a bot, only the owner may feed the board
         text = (msg.get("text") or msg.get("caption") or "").strip()
         if not text or text.startswith("/"):

@@ -122,6 +122,53 @@ def test_claim_creates_card():
     check(_inbox.get(it["tid"])["status"] == "claimed", "inbox item claimed")
     check(_inbox.unclaimed() == [], "item leaves the global column")
 
+    # #856 review IMPORTANT 2 - a browser-claimed card must be born with a
+    # history entry, exactly like cmd_claim's CLI path.
+    check(bool(card.get("history")), "claimed card carries a history entry")
+    check(card["history"][0]["from"] is None and card["history"][0]["to"] == "notes",
+          "history entry records the creation move (None -> notes)")
+    d_card = d["cards"][0]
+    check(bool(d_card.get("history")), "the history entry persisted to board.json, not just the response")
+
+
+def test_claim_and_discard_notify_other_boards_not_self():
+    """#856 review CRITICAL 1 - claim/discard must fan out cross-process via
+    _inbox.notify_boards, skipping THIS board's own port (its clients already
+    got the update from the direct _broadcast_inbox() call)."""
+    print("claim/discard call notify_boards(skip_port=own port)")
+    reset_inbox()
+    bd = mk_board()
+    it1 = _inbox.append("notify me on claim", update_id=50)
+    it2 = _inbox.append("notify me on discard", update_id=51)
+
+    calls = []
+    real_notify = _inbox.notify_boards
+    real_broadcast = serve.broadcast
+
+    def fake_notify(skip_port=None):
+        calls.append(("notify_boards", skip_port))
+
+    serve.broadcast = lambda name, data: None
+    _inbox.notify_boards = fake_notify
+    try:
+        cap = _Cap()
+        h = handler(bd, cap, {"tid": it1["tid"], "column": "notes"})
+        h._handle_inbox_claim()
+        check(cap.status == 200, "claim succeeded")
+        check(("notify_boards", 7999) in calls,
+              f"claim calls notify_boards(skip_port=own port) (got {calls})")
+
+        calls.clear()
+        cap2 = _Cap()
+        h2 = handler(bd, cap2, {"tid": it2["tid"]})
+        h2._handle_inbox_discard()
+        check(cap2.status == 200, "discard succeeded")
+        check(("notify_boards", 7999) in calls,
+              f"discard calls notify_boards(skip_port=own port) (got {calls})")
+    finally:
+        _inbox.notify_boards = real_notify
+        serve.broadcast = real_broadcast
+
 
 def test_double_claim_409():
     """The scenario that matters: TWO DIFFERENT boards racing for the same
@@ -441,6 +488,7 @@ def test_reserve_token_never_leaks_to_browser():
 if __name__ == "__main__":
     test_get_inbox_is_pure_read()
     test_claim_creates_card()
+    test_claim_and_discard_notify_other_boards_not_self()
     test_double_claim_409()
     test_claim_unknown_tid_404()
     test_discard()

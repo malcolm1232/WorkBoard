@@ -909,10 +909,31 @@ class BoardHandler(BaseHTTPRequestHandler):
         Tags are deliberately unvalidated here (`build_card` does not check
         them against the taxonomy) - a phone capture must not be blocked by a
         taxonomy the user never sees while texting.
+
+        `_record_move(card, None, column)` runs right after `build_card`
+        (mirrors cmd_claim exactly) so a browser-claimed card is born with a
+        `history` entry like every other card - #856 review IMPORTANT 2:
+        without it, `_hook_stop_recon.detect_carded_work`, `detect_batched`'s
+        `hist[0]` check, and `_metrics.py`'s per-column dwell all silently
+        mis-handle a claim-only session. Deliberately NOT paired with
+        `_set_active_work`: that asymmetry is correct (an agent claim steals
+        the pulse; a user's browser drag does not - see the #587 rule in
+        card_commands.py).
+
+        `_inbox.notify_boards(skip_port=...)` after `finalize` is the
+        CROSS-PROCESS half of the update (#856 review CRITICAL 1):
+        `_broadcast_inbox()` alone only reaches this server's OWN SSE
+        clients, so a second board left the claimed item rendered
+        indefinitely until its tab happened to refetch. `skip_port` is this
+        board's own port, so notify_boards skips the self-POST it would
+        otherwise send - this board's clients already got their one update
+        from the direct `_broadcast_inbox()` call above, and every OTHER
+        live board gets exactly one via the POST to its /inbox/notify.
         """
         import _inbox
         import _tg_config as tgcfg
         from card_state import build_card
+        from card_commands import _record_move
 
         body = self._read_body()
         tid = body.get("tid")
@@ -973,6 +994,12 @@ class BoardHandler(BaseHTTPRequestHandler):
                     meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
                                        "capturedAt": item.get("ts")}},
                 )
+                # #856 review IMPORTANT 2 - mirrors cmd_claim exactly (minus
+                # _set_active_work, deliberately - see docstring): every card
+                # must be born with a history entry, or a session whose only
+                # activity was a browser drag-claim looks like it carded
+                # nothing to the Stop-hook recon detector.
+                _record_move(card, None, column)
                 d["rev"] = int(d.get("rev", 0)) + 1
                 d["savedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 d["savedBy"] = "telegram"
@@ -1017,12 +1044,19 @@ class BoardHandler(BaseHTTPRequestHandler):
         broadcast("card-added", {"card": card})
         broadcast("rev-bumped", {"rev": rev, "savedBy": "telegram",
                                  "savedAt": d["savedAt"], "activeWork": d.get("activeWork")})
-        self._broadcast_inbox()
+        self._broadcast_inbox()  # this board's own SSE clients: exactly one update
+        _inbox.notify_boards(skip_port=type(self).port)  # every OTHER live board
         self._send(200, json.dumps({"ok": True, "card": card, "rev": rev}).encode())
 
     def _handle_inbox_discard(self):
         """POST /inbox/discard - drop an inbox item without ever creating a
-        card. No token required: discard is a moderation action."""
+        card. No token required: discard is a moderation action.
+
+        Like claim (see its docstring), a discard must also reach every
+        OTHER open board's SSE clients, not just this process's own (#856
+        review CRITICAL 1) - `notify_boards(skip_port=...)` does the
+        cross-process fanout, skipping this board's own port since
+        `_broadcast_inbox()` already updated its clients directly."""
         import _inbox
 
         body = self._read_body()
@@ -1036,7 +1070,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send(409, json.dumps(
                 {"ok": False, "conflict": True, "claim": e.claim}).encode())
             return
-        self._broadcast_inbox()
+        self._broadcast_inbox()  # this board's own SSE clients: exactly one update
+        _inbox.notify_boards(skip_port=type(self).port)  # every OTHER live board
         self._send(200, json.dumps({"ok": True}).encode())
 
     def _handle_inbox_notify(self):

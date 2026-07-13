@@ -224,6 +224,31 @@ def test_malformed_update_entries_skipped():
           "offset advances past the highest update_id seen, malformed or not")
 
 
+def test_malformed_chat_field_does_not_wedge_poller():
+    """Reviewer repro (#856 MINOR 5): `msg.get("chat", {})` only supplies the
+    {} default when the key is ABSENT. A malformed update where "chat" IS
+    present but is not a dict (a string, a number, null, a list) made
+    `.get("id")` raise AttributeError, which escaped poll() entirely - so
+    cfg.set_offset was never reached and Telegram would redeliver the same
+    bad update forever, wedging the poller permanently. Every one of these
+    must be a no-op, exactly like the other malformed-field guards, and a
+    well-formed update earlier or later in the SAME batch must still land."""
+    print("malformed chat field is a no-op, not a permanent wedge")
+    bad_chats = ["not-a-dict", 12345, None, ["nope"], True]
+    for bad_chat in bad_chats:
+        reset()
+        entries = [
+            {"update_id": 1, "message": {"chat": {"id": 42}, "text": "before"}},
+            {"update_id": 2, "message": {"chat": bad_chat, "text": "malformed"}},
+            {"update_id": 3, "message": {"chat": {"id": 42}, "text": "after"}},
+        ]
+        new = tp.poll(api=custom_api({"ok": True, "result": entries}))
+        check(len(new) == 2 and {n["title"] for n in new} == {"before", "after"},
+              f"chat={bad_chat!r}: both well-formed updates captured, malformed one skipped")
+        check(cfg.load()["offset"] == 4,
+              f"chat={bad_chat!r}: offset advances past ALL updates, not stuck on the malformed one")
+
+
 def test_stranded_capture_gets_confirmed_next_tick():
     print("reviewer repro: append raises on the 2nd update in a batch")
     reset()
@@ -485,6 +510,7 @@ if __name__ == "__main__":
     test_route_hint_claims_and_echoes()
     test_malformed_getupdates_result_shapes()
     test_malformed_update_entries_skipped()
+    test_malformed_chat_field_does_not_wedge_poller()
     test_stranded_capture_gets_confirmed_next_tick()
     test_claim_hint_subprocess_behavior()
     test_second_concurrent_poller_noops()

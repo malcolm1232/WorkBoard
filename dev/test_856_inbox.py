@@ -135,6 +135,64 @@ def test_corrupt_line_skipped():
     check(len(_inbox.unclaimed()) == 2, "corrupt line skipped, real items survive")
 
 
+def test_corrupt_line_does_not_collide_tid():
+    print("reviewer repro (#856 IMPORTANT 4): a corrupt line must not mint a duplicate tid")
+    reset()
+    for uid in range(2000, 2005):
+        _inbox.append(f"item {uid}", update_id=uid)
+    lines = _inbox.path().read_text().splitlines()
+    check(len(lines) == 5, "five real items on disk (T-1..T-5)")
+
+    # Corrupt the MIDDLE line (T-3) directly, bypassing the module - simulates
+    # a partial write / disk hiccup that damaged one line in place.
+    lines[2] = "{not json, corrupted mid-file"
+    _inbox.path().write_text("\n".join(lines) + "\n")
+
+    survivors = _inbox._read()  # noqa: SLF001 - whitebox: verifying the survivor set
+    check(len(survivors) == 4, "the corrupt line drops out; the other four survive")
+    check("T-5" in [i["tid"] for i in survivors],
+          "T-5 (appended AFTER the corrupted T-3) is among the survivors")
+
+    new = _inbox.append("fresh after corruption", update_id=2005)
+    check(new["tid"] != "T-5",
+          f"new capture must NOT collide with the surviving T-5 (got {new['tid']})")
+    check(new["tid"] not in {i["tid"] for i in survivors},
+          f"new capture's tid ({new['tid']}) is unused by any survivor")
+    check(new["tid"] == "T-6",
+          f"allocation is keyed off the highest surviving tid, not len(items) (got {new['tid']})")
+
+    # And it must be independently claimable - not accidentally aliased onto
+    # the old T-5's reservation/claim state.
+    reserved = _inbox.reserve(new["tid"])
+    check(reserved["tid"] == new["tid"], "the fresh capture reserves cleanly under its own tid")
+    _inbox.finalize(new["tid"], board="/some/board", card_num=999, token=reserved["reserveToken"])
+    check(_inbox.get(new["tid"])["claim"]["cardNum"] == 999,
+          "the fresh capture claims independently of the surviving T-5")
+    check(_inbox.get("T-5")["status"] == "unclaimed",
+          "claiming the new item left the pre-existing T-5 completely untouched")
+
+
+def test_corrupt_line_warns_on_stderr():
+    print("a skipped corrupt/malformed line is a LOUD warning, not a silent drop")
+    import contextlib
+    import io
+
+    reset()
+    _inbox.append("good one", update_id=2100)
+    with _inbox.path().open("a") as fh:
+        fh.write("{not json at all\n")
+        fh.write(json.dumps({"no": "tid field here"}) + "\n")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        survivors = _inbox._read()  # noqa: SLF001
+    err = buf.getvalue()
+    check(len(survivors) == 1, "both bad lines are skipped from the survivor set")
+    check("warning" in err.lower(), f"a warning is printed to stderr (got: {err!r})")
+    check(err.count("\n") >= 2 or len(err.splitlines()) >= 2,
+          f"one warning line per skipped line, not just one for the whole read (got: {err!r})")
+
+
 def test_counts():
     print("counts for the session digest")
     reset()
@@ -414,6 +472,8 @@ if __name__ == "__main__":
     test_first_wins_under_concurrency()
     test_conflict_carries_claim()
     test_corrupt_line_skipped()
+    test_corrupt_line_does_not_collide_tid()
+    test_corrupt_line_warns_on_stderr()
     test_counts()
     test_stale_reserve_self_heals()
     test_wrong_state_transitions_conflict()

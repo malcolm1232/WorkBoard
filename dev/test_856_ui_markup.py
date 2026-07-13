@@ -5,6 +5,7 @@ Run: python3 dev/test_856_ui_markup.py
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -57,8 +58,25 @@ def test_claim_branch_precedes_card_move():
 
 def test_taxonomy():
     print("tag taxonomy")
-    tax = (REPO / "templates" / "board.json").read_text()
-    check("from-telegram" in tax, "from-telegram registered in the new-board tag taxonomy")
+    # #856 review IMPORTANT 3 - templates/board.json must NOT carry a
+    # tagTaxonomy block: serve_bootstrap.py unconditionally overwrites
+    # data["tagTaxonomy"] from templates/tag-profiles.json on every real
+    # board creation, so a block on the raw template never takes effect
+    # there, but a HALF taxonomy (one name, no "main") turns
+    # card_state._check_tags into a whitelist for any code path that copies
+    # the template raw (e.g. skills/e2e/e2e_workboard.py's from_template=True)
+    # - silently stripping every ordinary tag. tag-profiles.json is what
+    # actually delivers and styles from-telegram, in all profiles.
+    board_json = json.loads((REPO / "templates" / "board.json").read_text())
+    check("tagTaxonomy" not in board_json,
+          "templates/board.json carries no tagTaxonomy block (dead code + live trap)")
+    profiles = json.loads((REPO / "templates" / "tag-profiles.json").read_text())
+    for name, profile in profiles.items():
+        if name.startswith("_"):
+            continue
+        sub_names = [t["name"] for t in profile.get("sub", [])]
+        check("from-telegram" in sub_names,
+              f"from-telegram registered in the '{name}' tag-profiles.json profile")
 
 
 if __name__ == "__main__":

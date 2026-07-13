@@ -5,11 +5,6 @@
   "savedBy": "claude",
   "nextNum": 1,
   "schemaVersion": 1,
-  "tagTaxonomy": {
-    "sub": [
-      { "name": "from-telegram", "color": "#4A7BA5" }
-    ]
-  },
   "columns": [
     {
       "id": "task",
