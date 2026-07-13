@@ -458,6 +458,16 @@ if [ -f "${recon_file}" ]; then
   recon_line="🔁 SIGN-OFF RECON PENDING: ${nreasons} item(s) in ${recon_file} — last session may have left work un-carded or cards stuck In-Progress. Review against your memory, create/move cards, then delete the file (stay-by-default)."
 fi
 
+# Telegram capture (#856): surface unclaimed phone captures, and fire a catch-up
+# poll in the background so a machine that was asleep still pulls the last 24h
+# without slowing session start.
+inbox_line=""
+inbox_py="$(dirname "$0")/_inbox.py"
+if [ -f "${inbox_py}" ]; then
+  inbox_line="$(python3 "${inbox_py}" --hook-line 2>/dev/null)"
+fi
+poller_py="$(dirname "$0")/telegram_poller.py"; if [ -f "${poller_py}" ]; then (python3 "${poller_py}" >/dev/null 2>&1 &); fi
+
 cat <<MSG
 <board-steward-session-start>
 Board: ${board_path}
@@ -465,6 +475,7 @@ ${live_line:-(server down — start: python3 $(dirname "$0")/serve.py --project 
 ${digest}
 ${pending_line}
 ${recon_line}
+${inbox_line}
 
 Protocol: every ship/fix/defer → \`${card_py} add\` or \`${card_py} fly\` immediately (no batching). Status queries → \`card.py list\` or digest above, not memory. Detail → \`card.py show <num>\`. Never auto-Read board.json.
 </board-steward-session-start>
