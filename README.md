@@ -98,6 +98,23 @@ See what shipped — and what's **still open** — laid out by date. Catch misse
 
 <img src="docs/assets/bug-to-and-fro.gif" width="480" alt="A card moving from Done back to In Progress with a bug tag, getting fixed, then returning to Done">
 
+### 5. 📱 Capture ideas from your phone
+
+Send a link or a thought to your own Telegram bot and it shows up on your boards.
+
+1. Message [@BotFather](https://t.me/BotFather) in Telegram, send `/newbot`, and copy the token.
+2. Run `card.py telegram-setup` and paste it, then message your new bot once when prompted.
+
+Captures land in a **📥 From Telegram** column that appears on every board you run.
+Drag one into any column to turn it into a real card there, tagged `from-telegram`, with your verbatim message as its origin.
+It disappears from every other board's From Telegram column the instant it's claimed.
+Prefix a message with `#<board>` (e.g. `#workboard fix the drag preview`) to route it straight to that board instead of dragging it manually.
+Set a short alias with `card.py telegram-alias qm ~/path/to/board` if a board's own folder name is not what you want to type from your phone.
+
+No server, no hosting, no cost: a local job polls Telegram every 15 minutes and nothing new listens on a port.
+One honest limit: Telegram itself drops an unconfirmed message after 24 hours if the machine never comes back online to poll for it.
+That is why the bot's `saved` reply on your phone is the real capture contract, not just a nicety.
+
 ---
 
 ## 📊 Token-Efficiency Summary — WorkBoard vs mem0 · claude-mem · Letta · graphify

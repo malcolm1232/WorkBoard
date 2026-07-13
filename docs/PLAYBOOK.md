@@ -96,6 +96,75 @@ retiring one. (Profiles + full rules: `templates/tag-profiles.json`.)
 
 ---
 
+## Phone capture (Telegram) - setup + operation
+
+Text an idea from your phone to your own Telegram bot; it lands in a shared, virtual
+**📥 From Telegram** column that renders on every board you run, until someone claims it onto exactly
+one of them as a real card.
+
+### One-time setup
+
+```bash
+python3 scripts/card.py telegram-setup
+```
+
+1. In Telegram, message [@BotFather](https://t.me/BotFather) and send `/newbot`.
+Pick a name; BotFather replies with a token that looks like `123456:ABC-DEF...`.
+2. Paste the token when the wizard asks (or pass `--token`).
+3. Open your new bot in Telegram and send it any message, then press Enter in the wizard.
+This is how the wizard learns your `chat_id`, so only messages from you are ever captured.
+4. The wizard installs a background job (`launchd` on macOS, `systemd` on Linux) that polls Telegram
+every 15 minutes.
+On Windows it prints a manual command to run instead, since there is no installed job.
+
+### Removing it
+
+```bash
+python3 scripts/card.py telegram-setup --uninstall
+```
+
+This removes only the local background job.
+It does not touch the saved token, chat id, or your aliases, and it never talks to Telegram - a plain
+`telegram-setup` re-run still works afterward without re-pasting the token.
+To delete the bot itself, message [@BotFather](https://t.me/BotFather) separately.
+
+### Claiming a capture
+
+- **Drag it.** Open any board; the From Telegram column shows every unclaimed capture across ALL your
+boards. Drag one into any real column and it becomes a card there, tagged `from-telegram`, with your
+verbatim message as its `origin`. It vanishes from every other board's From Telegram column the moment
+it lands.
+- **Claim from the CLI**, same effect: `card.py inbox` lists unclaimed captures; `card.py claim <T-n>
+[--column <col>]` promotes one onto the board you ran it from.
+- **Route it from your phone**, skipping the drag entirely: prefix the message itself with `#<alias>`
+(e.g. `#qm add the leverage check`). The bot replies `saved -> qm #431` once the next poll routes it.
+Set the alias with `card.py telegram-alias qm ~/path/to/board` (or drop the alias to fall back to a
+board's own folder name, which resolves automatically). `--rm` removes a custom alias.
+Two boards or two aliases that could mean the same thing never guess - an ambiguous or unknown `#hint`
+just leaves the capture in the global column for you to drag by hand.
+
+### What the session digest tells you
+
+The SessionStart hook's board digest surfaces phone captures the same way it surfaces everything else:
+
+- **`CAPTURES: N unclaimed from Telegram, oldest Nd`** - appears whenever there is at least one
+unclaimed item, so a capture never silently ages out of view.
+- **`⚠ TELEGRAM CAPTURE BROKEN: <reason>`** - appears even with zero unclaimed captures, because a
+revoked or rotated bot token is exactly the state where nothing is arriving at all and the digest is
+the only place that would ever say so. Re-run `card.py telegram-setup` to reconnect.
+
+### Honest constraints
+
+No server and no hosting cost: the poller is an outbound-only HTTPS `getUpdates` call, so nothing new
+ever listens on a port.
+Telegram itself drops an unconfirmed message after 24 hours if the machine that runs the poller stays
+off that whole time - the bot's `saved` reply on your phone, not the send itself, is the real capture
+contract.
+A claim reservation that crashes mid-flight self-heals after 120 seconds, so a stuck laptop can never
+strand a capture forever.
+
+---
+
 ## Reconciliation — the full recipes
 
 The condensed 3-check version is in `SKILL.md`. The supporting commands:

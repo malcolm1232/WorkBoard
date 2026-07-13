@@ -266,6 +266,10 @@ The browser polls `GET /board.json` every 3s and reloads on `rev` change. **Befo
 `scripts/`, read the architecture tree in `VISION.md`** — new work attaches to the branch that owns
 its concern or becomes a new leaf; never rewrite a parent.
 
+Phone captures land in the **📥 From Telegram** virtual column (shared across boards, not a real
+column in `board.json`). Claim one with `card.py claim <T-n> [--column <col>]`; list them with
+`card.py inbox`.
+
 ---
 
 ## What you must NOT do
