@@ -56,6 +56,51 @@ def build_plist(serve_py: Path, project: Path, port: int) -> dict:
     }
 
 
+POLLER_LABEL = "com.boardsteward.telegram"  # one bot, one inbox: a single global job
+
+
+def poller_plist_path() -> Path:
+    return PLIST_DIR / f"{POLLER_LABEL}.plist"
+
+
+def build_poller_plist(poller_py: Path) -> dict:
+    """A 15-minute interval job, NOT a KeepAlive daemon.
+
+    KeepAlive must stay unset: the poller exits after each cycle, and launchd
+    would respawn it in a tight loop.
+    """
+    return {
+        "Label": POLLER_LABEL,
+        "ProgramArguments": [find_python(), str(poller_py)],
+        "RunAtLoad": True,
+        "StartInterval": 900,
+        "StandardOutPath": str(LOG_DIR / "telegram-poller.out.log"),
+        "StandardErrorPath": str(LOG_DIR / "telegram-poller.err.log"),
+    }
+
+
+def install_poller(dry_run: bool = False) -> Path:
+    poller_py = Path(__file__).resolve().parent / "telegram_poller.py"
+    plist = build_poller_plist(poller_py)
+    target = poller_plist_path()
+    if dry_run:
+        return target
+    PLIST_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["launchctl", "unload", str(target)], capture_output=True)
+    with target.open("wb") as fh:
+        plistlib.dump(plist, fh)
+    subprocess.run(["launchctl", "load", str(target)], capture_output=True)
+    return target
+
+
+def uninstall_poller() -> None:
+    target = poller_plist_path()
+    subprocess.run(["launchctl", "unload", str(target)], capture_output=True)
+    if target.exists():
+        target.unlink()
+
+
 def status(port: int) -> int:
     p = plist_path(port)
     if not p.exists():

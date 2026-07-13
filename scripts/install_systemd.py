@@ -61,6 +61,37 @@ def build_unit(serve_py: Path, project: Path, port: int) -> str:
     ).format(py=py, serve=serve_py, project=project, port=port)
 
 
+POLLER_UNIT = "boardsteward-telegram"
+
+
+def install_poller() -> None:
+    """A oneshot service plus a 15-minute timer."""
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    poller_py = Path(__file__).resolve().parent / "telegram_poller.py"
+
+    (unit_dir / f"{POLLER_UNIT}.service").write_text(
+        "[Unit]\n"
+        "Description=board-steward Telegram capture poller\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart={find_python()} {poller_py}\n"
+    )
+    (unit_dir / f"{POLLER_UNIT}.timer").write_text(
+        "[Unit]\n"
+        "Description=Poll Telegram for captured ideas every 15 minutes\n\n"
+        "[Timer]\n"
+        "OnBootSec=2min\n"
+        "OnUnitActiveSec=15min\n"
+        "Persistent=true\n\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", f"{POLLER_UNIT}.timer"],
+                   capture_output=True)
+
+
 def _systemctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 

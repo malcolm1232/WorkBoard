@@ -35,6 +35,25 @@ def pick_installer() -> str:
              f"Supported: macOS (darwin), Linux, Windows (win32).")
 
 
+def install_poller() -> None:
+    """Install the 15-minute Telegram capture job for this platform."""
+    if sys.platform == "darwin":
+        import install_launchd
+
+        install_launchd.install_poller()
+        return
+    if sys.platform.startswith("linux"):
+        import install_systemd
+
+        install_systemd.install_poller()
+        return
+    poller = Path(__file__).resolve().parent / "telegram_poller.py"
+    raise RuntimeError(
+        f"no scheduler integration for {sys.platform}; schedule this every 15 minutes: "
+        f"python3 {poller}"
+    )
+
+
 def main() -> None:
     script = pick_installer()
     target = Path(__file__).resolve().parent / script
