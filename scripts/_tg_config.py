@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 
 CONFIG_ENV = "BOARD_TELEGRAM_CONFIG"
@@ -19,13 +20,31 @@ DEFAULT_PATH = Path.home() / ".board-steward" / "telegram.json"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
+class _ReadFailed(Exception):
+    """Private sentinel: the config file exists but could not be read (a
+    chmod 000 file, a cloud-sync lock, an unsearchable parent dir - any
+    OSError). The bytes on disk may be a perfectly good config; callers must
+    not treat this the same as "missing or corrupt" and must never overwrite
+    the file while it is in this state.
+    """
+
+
 def config_path() -> Path:
     env = os.environ.get(CONFIG_ENV)
     return Path(env) if env else DEFAULT_PATH
 
 
 def _read_raw() -> dict:
-    """Whatever is on disk, without the usable-config gate. {} if missing/corrupt.
+    """Whatever is on disk, without the usable-config gate.
+
+    Returns {} when the file is missing, or present but corrupt/unparseable/
+    not a JSON object - in those cases there is nothing recoverable, so
+    treating it as empty (and letting a later save() overwrite it) is safe.
+
+    Raises _ReadFailed when the file exists but could not be read at all
+    (any OSError, including an unsearchable parent directory surfacing via
+    Path.exists()). The contents are unknown but may be intact, so the
+    caller must not overwrite them.
 
     Callers that only need to PRESERVE existing fields (patching the offset,
     reading custom aliases) must use this instead of load(): load() returns
@@ -33,18 +52,26 @@ def _read_raw() -> dict:
     would silently discard the real token/chat_id/aliases already on disk.
     """
     p = config_path()
-    if not p.exists():
-        return {}
     try:
-        conf = json.loads(p.read_text())
+        if not p.exists():
+            return {}
+        text = p.read_text()
+    except OSError as e:
+        raise _ReadFailed(str(e)) from e
+    try:
+        conf = json.loads(text)
     except Exception:
         return {}
     return conf if isinstance(conf, dict) else {}
 
 
 def load() -> dict | None:
-    """The usable config, or None if not configured / corrupt / incomplete."""
-    conf = _read_raw()
+    """The usable config, or None if not configured / corrupt / incomplete /
+    unreadable."""
+    try:
+        conf = _read_raw()
+    except _ReadFailed:
+        return None
     if not conf or not conf.get("token") or not conf.get("chat_id"):
         return None
     return conf
@@ -53,11 +80,12 @@ def load() -> dict | None:
 def save(conf: dict) -> None:
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    # Open with mode 0600 from the very first byte on disk: the token is a
-    # credential and must never be briefly world/group readable via the
-    # process umask (os.chmod after write_text is too late).
-    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    # mkstemp always CREATES a fresh file at mode 0600 (no reuse of a stale
+    # leftover at a fixed path, which could still be sitting at a lax mode
+    # from a crashed prior write and would carry that mode onto the real
+    # config via os.replace).
+    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(conf, indent=2, sort_keys=True))
@@ -69,7 +97,18 @@ def save(conf: dict) -> None:
 
 
 def _patch(**fields) -> None:
-    conf = _read_raw()
+    """Merge fields into the on-disk config and save it - unless the
+    existing file could not be read, in which case do nothing.
+
+    This is what a scheduled, unattended caller (set_offset, set_status)
+    relies on: "I couldn't read this" must never become "so I'll overwrite
+    it", or a perfectly good token sitting behind a permission error would
+    be destroyed.
+    """
+    try:
+        conf = _read_raw()
+    except _ReadFailed:
+        return
     conf.update(fields)
     save(conf)
 
@@ -99,16 +138,33 @@ def aliases() -> dict[str, str]:
     """alias -> board dir. Derived from the user's boards; custom aliases win.
 
     A folder name shared by two boards is dropped: it is ambiguous, so it must
-    not resolve at all.
+    not resolve at all. The same rule applies to custom aliases: if two
+    different custom alias strings slugify to the same thing but point at
+    different boards, that slug is ambiguous and dropped too (never guess
+    which board it meant). A custom alias overriding a derived one is still a
+    deliberate override, not an ambiguity - and two custom aliases that share
+    a slug but agree on the target board are redundant, not ambiguous.
     """
     derived: dict[str, list[str]] = {}
     for d in _board_dirs():
         name = Path(d).parent.name  # ".../QuantifyMe/HFTAgents/board" -> "HFTAgents"
         derived.setdefault(_slug(name), []).append(d)
     out = {a: paths[0] for a, paths in derived.items() if len(paths) == 1}
-    conf = _read_raw()
+
+    try:
+        conf = _read_raw()
+    except _ReadFailed:
+        # Custom aliases are unavailable while the file is unreadable; the
+        # derived aliases are still safe to serve. Degrade, don't crash.
+        conf = {}
+    custom: dict[str, set[str]] = {}
     for alias, d in (conf.get("aliases") or {}).items():
-        out[_slug(alias)] = d
+        custom.setdefault(_slug(alias), set()).add(d)
+    for slug, targets in custom.items():
+        if len(targets) == 1:
+            out[slug] = next(iter(targets))
+        else:
+            out.pop(slug, None)  # two custom aliases disagree: never guess
     return out
 
 

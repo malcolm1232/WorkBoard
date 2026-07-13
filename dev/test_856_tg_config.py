@@ -168,6 +168,146 @@ def test_patch_preserves_degraded_config():
     check(cfg.load() is None, "load() still refuses to call a patched-corrupt config usable")
 
 
+def test_custom_alias_collision_is_none():
+    print("custom alias slug collision resolves to None; same-target collision is fine")
+    write_assignments({"/Users/x/Desktop/WorkBoard/board": 7891})
+    cfg.save({
+        "token": "T", "chat_id": 42, "offset": 0,
+        "aliases": {"Trading-Bot": "/Users/x/Desktop/A/board",
+                    "TradingBot": "/Users/x/Desktop/B/board"},
+    })
+    check(cfg.resolve_board("tradingbot") is None,
+          "two different custom aliases sharing a slug but different boards resolve to None")
+    check(cfg.resolve_board("workboard").name == "board",
+          "an unrelated derived alias still resolves fine")
+
+    cfg.save({
+        "token": "T", "chat_id": 42, "offset": 0,
+        "aliases": {"Trading-Bot": "/Users/x/Desktop/A/board",
+                    "TradingBot": "/Users/x/Desktop/A/board"},
+    })
+    check(str(cfg.resolve_board("tradingbot")).endswith("/A/board"),
+          "two custom aliases sharing a slug AND agreeing on the target is not ambiguous")
+
+    cfg.save({
+        "token": "T", "chat_id": 42, "offset": 0,
+        "aliases": {"WorkBoard": "/Users/x/Desktop/QuantifyMe/HFTAgents/board"},
+    })
+    check(str(cfg.resolve_board("workboard")).endswith("/HFTAgents/board"),
+          "a single custom alias overriding a derived one is a deliberate override, not ambiguity")
+
+
+def test_non_object_json_is_treated_as_empty():
+    print("valid JSON that isn't an object is treated as empty, not a crash")
+    write_assignments({})
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+
+    cfg.config_path().write_text(json.dumps([1, 2, 3]))
+    check(cfg.load() is None, "bare-list config: load() returns None")
+    try:
+        cfg.set_offset(1)
+        raised = False
+    except Exception:
+        raised = True
+    check(not raised, "_patch on a bare-list config does not raise")
+
+    cfg.config_path().write_text(json.dumps("just a string"))
+    check(cfg.load() is None, "bare-string config: load() returns None")
+    try:
+        cfg.set_status("y")
+        raised = False
+    except Exception:
+        raised = True
+    check(not raised, "_patch on a bare-string config does not raise")
+
+
+def test_unreadable_config_never_clobbered():
+    print("an unreadable config file is never clobbered (token survives)")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        print("  -- skipped: running as root, chmod 000 is still readable")
+        return
+
+    write_assignments({})
+    cfg.save({
+        "token": "REAL-TOKEN", "chat_id": 42, "offset": 0,
+        "aliases": {"qm": "/Users/x/Desktop/QuantifyMe/HFTAgents/board"},
+    })
+    path = cfg.config_path()
+    before = path.read_bytes()
+    os.chmod(path, 0o000)
+    try:
+        try:
+            cfg.set_offset(5)
+            raised_offset = False
+        except Exception:
+            raised_offset = True
+        try:
+            cfg.set_status("degraded")
+            raised_status = False
+        except Exception:
+            raised_status = True
+        check(not raised_offset, "set_offset on an unreadable config does not raise")
+        check(not raised_status, "set_status on an unreadable config does not raise")
+        check(cfg.load() is None, "load() reports no usable config while unreadable")
+    finally:
+        os.chmod(path, 0o600)
+
+    after = path.read_bytes()
+    check(after == before, "unreadable config file's bytes are byte-for-byte unchanged")
+
+    conf = cfg.load()
+    check(conf is not None and conf.get("token") == "REAL-TOKEN",
+          "token survives, once permissions are restored")
+    check(conf is not None and conf.get("chat_id") == 42,
+          "chat_id survives, once permissions are restored")
+    check(conf is not None and conf.get("aliases", {}).get("qm") ==
+          "/Users/x/Desktop/QuantifyMe/HFTAgents/board",
+          "custom aliases survive, once permissions are restored")
+
+
+def test_read_raw_survives_unsearchable_parent_dir():
+    print("_read_raw / load survive an unsearchable parent directory")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        print("  -- skipped: running as root, an unsearchable dir is still traversable")
+        return
+
+    orig_env = os.environ["BOARD_TELEGRAM_CONFIG"]
+    locked_dir = _STATE / "locked_parent"
+    locked_dir.mkdir()
+    target = locked_dir / "telegram.json"
+    target.write_text(json.dumps({"token": "X", "chat_id": 1}))
+    os.environ["BOARD_TELEGRAM_CONFIG"] = str(target)
+    os.chmod(locked_dir, 0o000)
+    try:
+        try:
+            result = cfg.load()
+            raised = False
+        except Exception:
+            raised = True
+        check(not raised, "load() does not crash when the parent dir is unsearchable")
+        check(result is None, "load() reports None when the parent dir is unsearchable")
+    finally:
+        os.chmod(locked_dir, 0o700)
+        os.environ["BOARD_TELEGRAM_CONFIG"] = orig_env
+
+
+def test_stale_tmp_file_not_reused():
+    print("a stale, lax-mode tmp file at the old fixed path is not reused")
+    write_assignments({})
+    stale = cfg.config_path().with_suffix(".tmp")
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("leftover bytes from a crashed write")
+    os.chmod(stale, 0o644)
+    try:
+        cfg.save({"token": "T3", "chat_id": 7, "offset": 0})
+        mode = stat.S_IMODE(cfg.config_path().stat().st_mode)
+        check(mode == 0o600, f"final config is still 0600 with a stale tmp file present (got {oct(mode)})")
+        check(cfg.load()["token"] == "T3", "save still succeeds with a stale tmp file present")
+    finally:
+        if stale.exists():
+            stale.unlink()
+
+
 def test_board_dirs_degrades_on_broken_registry():
     print("_board_dirs degrades to [] when the registry is broken")
     import port_registry
@@ -193,6 +333,11 @@ if __name__ == "__main__":
     test_task_column()
     test_blank_alias_never_guesses()
     test_patch_preserves_degraded_config()
+    test_custom_alias_collision_is_none()
+    test_non_object_json_is_treated_as_empty()
+    test_unreadable_config_never_clobbered()
+    test_read_raw_survives_unsearchable_parent_dir()
+    test_stale_tmp_file_not_reused()
     test_board_dirs_degrades_on_broken_registry()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)
