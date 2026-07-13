@@ -58,7 +58,9 @@ Session start: hook injects "N unclaimed captures (oldest Xd)" + catch-up poll
 - Config: `~/.board-steward/telegram.json` = `{token, chat_id, offset}`, chmod 600.
 - Loop: `getUpdates(offset)` -> ignore messages not from `chat_id` -> append unclaimed items to the inbox -> `sendMessage` a "saved" confirmation -> advance `offset` only after the inbox write has landed.
 - At-least-once delivery with dedupe by Telegram `update_id`; re-polling after a crash is safe.
-- Parses a leading `#<board-alias>` token into a `routeHint` field (alias matched against the board registry); the hint is stored, not executed here.
+- Parses a leading `#<board-alias>` token into a `routeHint` field; the hint is stored, not executed here.
+- Alias resolution is per user and never hardcoded. Aliases derive from the user's own board registry (`~/.board-steward/port-assignments.json`): each board path's project folder name, slugified (e.g. `.../TradingResearch/board` -> `#tradingresearch`). Unambiguous prefixes also match (`#trading`). Users can add custom short aliases in `telegram.json` (e.g. `"qm" -> .../HFTAgents/board`) via setup or a `card.py telegram-alias` subcommand; custom aliases win over derived ones. Ambiguous or unknown alias -> hint ignored, item stays in the global column (never guess).
+- The confirmation reply echoes the resolution ("saved -> qm" vs plain "saved") so the user knows from the phone whether the hint landed.
 
 ### `card.py telegram-setup` (new subcommand)
 
