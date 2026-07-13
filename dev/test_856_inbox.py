@@ -67,18 +67,22 @@ def test_claim_lifecycle():
     print("reserve / finalize / release / discard")
     reset()
     a = _inbox.append("a", update_id=300)
-    _inbox.reserve(a["tid"])
+    reserved_a = _inbox.reserve(a["tid"])
     check(_inbox.get(a["tid"])["status"] == "reserved", "reserve flips to reserved")
-    _inbox.finalize(a["tid"], board="/b/board", card_num=431)
+    check(bool(reserved_a.get("reserveToken")), "reserve returns a reserveToken")
+    _inbox.finalize(a["tid"], board="/b/board", card_num=431, token=reserved_a["reserveToken"])
     got = _inbox.get(a["tid"])
     check(got["status"] == "claimed", "finalize flips to claimed")
     check(got["claim"]["cardNum"] == 431, "claim records card num")
+    check(got.get("reserveToken") is None, "finalize clears the reserveToken")
     check(_inbox.unclaimed() == [], "claimed item leaves the unclaimed list")
 
     b = _inbox.append("b", update_id=301)
-    _inbox.reserve(b["tid"])
-    _inbox.release(b["tid"])
-    check(_inbox.get(b["tid"])["status"] == "unclaimed", "release restores unclaimed")
+    reserved_b = _inbox.reserve(b["tid"])
+    _inbox.release(b["tid"], token=reserved_b["reserveToken"])
+    got_b = _inbox.get(b["tid"])
+    check(got_b["status"] == "unclaimed", "release restores unclaimed")
+    check(got_b.get("reserveToken") is None, "release clears the reserveToken")
 
     c = _inbox.append("c", update_id=302)
     _inbox.discard(c["tid"])
@@ -112,8 +116,8 @@ def test_conflict_carries_claim():
     print("conflict reports the winning claim")
     reset()
     it = _inbox.append("x", update_id=500)
-    _inbox.reserve(it["tid"])
-    _inbox.finalize(it["tid"], board="/qm/board", card_num=77)
+    reserved = _inbox.reserve(it["tid"])
+    _inbox.finalize(it["tid"], board="/qm/board", card_num=77, token=reserved["reserveToken"])
     try:
         _inbox.reserve(it["tid"])
         check(False, "second reserve must raise")
@@ -146,7 +150,7 @@ def test_stale_reserve_self_heals():
     print("stale reserve self-heals")
     reset()
     it = _inbox.append("stale", update_id=800)
-    _inbox.reserve(it["tid"])
+    first = _inbox.reserve(it["tid"])
 
     # A fresh reserve is still held: a second reserve must block.
     try:
@@ -164,11 +168,15 @@ def test_stale_reserve_self_heals():
     ]
     _inbox._write(items)  # noqa: SLF001
 
-    check(it["tid"] in [i["tid"] for i in _inbox.unclaimed()], "stale reserve reappears as unclaimed")
+    free_items = _inbox.unclaimed()
+    check(it["tid"] in [i["tid"] for i in free_items], "stale reserve reappears as unclaimed")
+    stale_payload = next(i for i in free_items if i["tid"] == it["tid"])
+    check("reserveToken" not in stale_payload, "unclaimed() strips the reserveToken before it reaches a browser")
 
     # And because it is stale, a new reserve now succeeds instead of conflicting.
     reclaimed = _inbox.reserve(it["tid"])
     check(reclaimed["status"] == "reserved", "stale reserve is reclaimable")
+    check(reclaimed["reserveToken"] != first["reserveToken"], "takeover mints a fresh reserveToken")
 
 
 def test_wrong_state_transitions_conflict():
@@ -178,17 +186,17 @@ def test_wrong_state_transitions_conflict():
     # finalize without reserve first.
     a = _inbox.append("a", update_id=900)
     try:
-        _inbox.finalize(a["tid"], board="/board-a", card_num=1)
+        _inbox.finalize(a["tid"], board="/board-a", card_num=1, token="never-reserved")
         check(False, "finalize on unclaimed item must raise")
     except _inbox.InboxConflict:
         check(True, "finalize-without-reserve raises InboxConflict")
 
     # release on a claimed item.
     b = _inbox.append("b", update_id=901)
-    _inbox.reserve(b["tid"])
-    _inbox.finalize(b["tid"], board="/board-b", card_num=2)
+    reserved_b = _inbox.reserve(b["tid"])
+    _inbox.finalize(b["tid"], board="/board-b", card_num=2, token=reserved_b["reserveToken"])
     try:
-        _inbox.release(b["tid"])
+        _inbox.release(b["tid"], token=reserved_b["reserveToken"])
         check(False, "release on claimed item must raise")
     except _inbox.InboxConflict:
         check(True, "release-on-claimed raises InboxConflict")
@@ -196,8 +204,8 @@ def test_wrong_state_transitions_conflict():
 
     # discard on a claimed item.
     c = _inbox.append("c", update_id=902)
-    _inbox.reserve(c["tid"])
-    _inbox.finalize(c["tid"], board="/board-c", card_num=3)
+    reserved_c = _inbox.reserve(c["tid"])
+    _inbox.finalize(c["tid"], board="/board-c", card_num=3, token=reserved_c["reserveToken"])
     try:
         _inbox.discard(c["tid"])
         check(False, "discard on claimed item must raise")
@@ -207,25 +215,38 @@ def test_wrong_state_transitions_conflict():
 
     # double finalize.
     d = _inbox.append("d", update_id=903)
-    _inbox.reserve(d["tid"])
-    _inbox.finalize(d["tid"], board="/board-d", card_num=4)
+    reserved_d = _inbox.reserve(d["tid"])
+    _inbox.finalize(d["tid"], board="/board-d", card_num=4, token=reserved_d["reserveToken"])
     try:
-        _inbox.finalize(d["tid"], board="/board-d2", card_num=5)
+        _inbox.finalize(d["tid"], board="/board-d2", card_num=5, token=reserved_d["reserveToken"])
         check(False, "double finalize must raise")
     except _inbox.InboxConflict:
         check(True, "double-finalize raises InboxConflict")
     check(_inbox.get(d["tid"])["claim"]["cardNum"] == 4, "double-finalize did not overwrite the original claim")
+
+    # finalize with a wrong/stale token on a still-reserved item.
+    e = _inbox.append("e", update_id=904)
+    reserved_e = _inbox.reserve(e["tid"])
+    try:
+        _inbox.finalize(e["tid"], board="/board-e", card_num=6, token="not-the-real-token")
+        check(False, "finalize with a wrong token must raise")
+    except _inbox.InboxConflict:
+        check(True, "finalize-with-wrong-token raises InboxConflict")
+    check(_inbox.get(e["tid"])["status"] == "reserved", "wrong-token finalize left status untouched")
+    _inbox.finalize(e["tid"], board="/board-e", card_num=6, token=reserved_e["reserveToken"])
+    check(_inbox.get(e["tid"])["status"] == "claimed", "the correct token still finalizes fine")
 
 
 def test_duplicate_claim_regression():
     print("reviewer repro: release-then-reclaim can no longer duplicate a claim")
     reset()
     a = _inbox.append("y", update_id=2)
-    _inbox.reserve(a["tid"])
-    _inbox.finalize(a["tid"], "/board-a", 1)  # claimed by A
+    reserved_a = _inbox.reserve(a["tid"])
+    token_a = reserved_a["reserveToken"]
+    _inbox.finalize(a["tid"], "/board-a", 1, token=token_a)  # claimed by A
 
     try:
-        _inbox.release(a["tid"])  # must NOT silently un-claim it
+        _inbox.release(a["tid"], token=token_a)  # must NOT silently un-claim it
         check(False, "release on a claimed item must raise, not un-claim it")
     except _inbox.InboxConflict:
         check(True, "release on claimed item is refused")
@@ -240,13 +261,56 @@ def test_duplicate_claim_regression():
         check(e.claim["cardNum"] == 1, "conflict still reports board A's original claim")
 
     try:
-        _inbox.finalize(a["tid"], "/board-b", 2)
+        _inbox.finalize(a["tid"], "/board-b", 2, token=token_a)
         check(False, "board B must not be able to also claim this item")
     except _inbox.InboxConflict:
         check(True, "second claim by board B is refused")
 
     check(_inbox.get(a["tid"])["claim"]["board"] == "/board-a", "item is still claimed by board A only")
     check(_inbox.get(a["tid"])["claim"]["cardNum"] == 1, "item still carries board A's card number")
+
+
+def test_stale_takeover_cannot_produce_two_claims():
+    print("reviewer repro #2: stalled process A cannot win after B legally takes over a stale reserve")
+    reset()
+    it = _inbox.append("takeover", update_id=1000)
+
+    # 1. Process A reserves T-1.
+    reserved_a = _inbox.reserve(it["tid"])
+    token_a = reserved_a["reserveToken"]
+    check(bool(token_a), "A's reserve returns a reserveToken")
+
+    # 2. More than STALE_RESERVE_S passes (aged without sleeping) and B
+    #    legally re-reserves the now-stale item, minting a fresh token.
+    got = _inbox.get(it["tid"])
+    got["reservedAt"] = time.time() - (_inbox.STALE_RESERVE_S + 1)
+    items = [
+        (got if i["tid"] == it["tid"] else i)
+        for i in _inbox._read()  # noqa: SLF001 - whitebox test of the module it covers
+    ]
+    _inbox._write(items)  # noqa: SLF001
+
+    reserved_b = _inbox.reserve(it["tid"])
+    token_b = reserved_b["reserveToken"]
+    check(bool(token_b), "B's reserve returns a reserveToken")
+    check(token_b != token_a, "B's takeover mints a token different from A's stale one")
+
+    # 3. Process A wakes up and calls finalize with its now-invalid token:
+    #    this must be refused, not silently win.
+    try:
+        _inbox.finalize(it["tid"], board="/board-a", card_num=111, token=token_a)
+        check(False, "A's finalize with its stale token must raise InboxConflict")
+    except _inbox.InboxConflict:
+        check(True, "A's finalize with its stale token is refused")
+    check(_inbox.get(it["tid"])["status"] == "reserved", "A's refused finalize left the item reserved (by B)")
+
+    # 4. B's finalize with its correct token succeeds.
+    claimed = _inbox.finalize(it["tid"], board="/board-b", card_num=222, token=token_b)
+    check(claimed["status"] == "claimed", "B's finalize succeeds")
+
+    final = _inbox.get(it["tid"])
+    check(final["claim"]["board"] == "/board-b", "the one true claim belongs to B's board")
+    check(final["claim"]["cardNum"] == 222, "the one true claim carries B's card number")
 
 
 def test_notify_boards_never_raises():
@@ -280,6 +344,7 @@ if __name__ == "__main__":
     test_stale_reserve_self_heals()
     test_wrong_state_transitions_conflict()
     test_duplicate_claim_regression()
+    test_stale_takeover_cannot_produce_two_claims()
     test_notify_boards_never_raises()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

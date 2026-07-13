@@ -16,6 +16,7 @@ import fcntl
 import json
 import os
 import re
+import secrets
 import time
 import urllib.request
 from contextlib import contextmanager
@@ -147,6 +148,7 @@ def append(text: str, update_id: int, ts: str | None = None) -> dict | None:
             "ts": ts or _now(),
             "status": "unclaimed",
             "claim": None,
+            "reserveToken": None,
         }
         items.append(item)
         _write(items)
@@ -160,8 +162,21 @@ def get(tid: str) -> dict | None:
     return None
 
 
+def _for_browser(item: dict) -> dict:
+    """Drop the reservation token before an item goes to a browser.
+
+    It's a concurrency guard, not a capability, so leaking it isn't a
+    security hole - but there's no reason to hand it out either.
+    """
+    if "reserveToken" not in item:
+        return item
+    item = dict(item)
+    item.pop("reserveToken", None)
+    return item
+
+
 def unclaimed() -> list[dict]:
-    return [i for i in _read() if _is_free(i)]
+    return [_for_browser(i) for i in _read() if _is_free(i)]
 
 
 def counts() -> dict:
@@ -200,37 +215,67 @@ def _mutate_if(tid: str, predicate, fn, conflict_msg) -> dict:
 
 
 def reserve(tid: str) -> dict:
-    """Atomic CAS: unclaimed -> reserved. First caller wins; the rest raise."""
+    """Atomic CAS: unclaimed -> reserved. First caller wins; the rest raise.
+
+    Stamps a fresh, unguessable `reserveToken` on the item and returns it.
+    A caller that later takes over a *stale* reservation (see `_is_free`)
+    mints a new token here, which invalidates the stalled holder's copy -
+    that holder's `finalize`/`release` will then be refused instead of
+    racing the new claimer. See `finalize`/`release`.
+    """
+    token = secrets.token_hex(8)
     return _mutate_if(
         tid,
         _is_free,
-        lambda i: dict(i, status="reserved", reservedAt=time.time()),
+        lambda i: dict(i, status="reserved", reservedAt=time.time(), reserveToken=token),
         lambda i: f"{tid} is already {i.get('status')}",
     )
 
 
-def finalize(tid: str, board: str, card_num: int) -> dict:
-    """reserved -> claimed. Raises InboxConflict if the item isn't reserved."""
+def _held_by(item: dict, token: str) -> bool:
+    return item.get("status") == "reserved" and item.get("reserveToken") == token
+
+
+def _reserve_conflict_msg(tid: str, token: str):
+    def _msg(i: dict) -> str:
+        if i.get("status") != "reserved":
+            return f"{tid} is not reserved (status={i.get('status')})"
+        return f"{tid}'s reservation was taken over by another claimer (stale token)"
+
+    return _msg
+
+
+def finalize(tid: str, board: str, card_num: int, token: str) -> dict:
+    """reserved -> claimed. Raises InboxConflict if not reserved by `token`.
+
+    `token` must be the value `reserve()` returned as `reserveToken` for
+    this exact reservation. If the reservation went stale and someone
+    else took it over, the item now carries a different token and this
+    call is refused - closing the window where a stalled process's
+    finalize could otherwise win after another process already claimed
+    the item on a different board.
+    """
     return _mutate_if(
         tid,
-        lambda i: i.get("status") == "reserved",
+        lambda i: _held_by(i, token),
         lambda i: dict(
             i,
             status="claimed",
             reservedAt=None,
+            reserveToken=None,
             claim={"board": board, "cardNum": card_num, "ts": _now()},
         ),
-        lambda i: f"{tid} is not reserved (status={i.get('status')})",
+        _reserve_conflict_msg(tid, token),
     )
 
 
-def release(tid: str) -> dict:
-    """reserved -> unclaimed, for rollback. Raises InboxConflict if not reserved."""
+def release(tid: str, token: str) -> dict:
+    """reserved -> unclaimed, for rollback. Raises InboxConflict if not reserved by `token`."""
     return _mutate_if(
         tid,
-        lambda i: i.get("status") == "reserved",
-        lambda i: dict(i, status="unclaimed", reservedAt=None),
-        lambda i: f"{tid} is not reserved (status={i.get('status')})",
+        lambda i: _held_by(i, token),
+        lambda i: dict(i, status="unclaimed", reservedAt=None, reserveToken=None),
+        _reserve_conflict_msg(tid, token),
     )
 
 
@@ -239,12 +284,14 @@ def discard(tid: str) -> dict:
 
     Raises InboxConflict if the item is already claimed (discarding a
     claimed item would detach a live card's provenance) or already
-    discarded.
+    discarded. No token is required: discard is a moderation action, not
+    a claim-transfer, and it's safe (idempotent-ish) for it to also
+    interrupt someone else's in-flight reservation.
     """
     return _mutate_if(
         tid,
         lambda i: i.get("status") in ("unclaimed", "reserved"),
-        lambda i: dict(i, status="discarded", reservedAt=None),
+        lambda i: dict(i, status="discarded", reservedAt=None, reserveToken=None),
         lambda i: f"{tid} cannot be discarded (status={i.get('status')})",
     )
 
