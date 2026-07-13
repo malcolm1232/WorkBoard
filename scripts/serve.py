@@ -897,9 +897,14 @@ class BoardHandler(BaseHTTPRequestHandler):
         a same-board duplicate (a card whose meta.telegram.tid already equals
         this tid); re-verify ownership of the reservation immediately before
         the write (a stale-reservation takeover may have happened in
-        between); release on write failure; once the write has landed, never
-        release again - only finalize (best-effort - the card is already
-        durable even if finalize fails).
+        between); everything from the column lookup through the successful
+        atomic_write runs in ONE release-guarded try/except, so ANY failure
+        along that path (not just the write itself) releases the reservation
+        and sends a clean 500 instead of letting the exception escape inside
+        _write_lock (which would drop the connection with no response and
+        strand the reservation until the 120s stale self-heal); once the
+        write has landed, never release again - only finalize (best-effort -
+        the card is already durable even if finalize fails).
 
         Tags are deliberately unvalidated here (`build_card` does not check
         them against the taxonomy) - a phone capture must not be blocked by a
@@ -950,36 +955,46 @@ class BoardHandler(BaseHTTPRequestHandler):
                 }).encode())
                 return
 
-            column = body.get("column") or tgcfg.task_column(d)
-            card = build_card(
-                d,
-                title=item["title"],
-                column=column,
-                tags=["from-telegram"],
-                origin=item["text"],
-                meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
-                                   "capturedAt": item.get("ts")}},
-            )
-            d["rev"] = int(d.get("rev", 0)) + 1
-            d["savedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            d["savedBy"] = "telegram"
-
-            # Pre-write ownership re-check: a stale-reservation takeover may
-            # have happened between reserve() above and here. Abort BEFORE
-            # writing if we no longer hold it - nothing has touched disk yet.
-            fresh = _inbox.get(tid)
-            if not (fresh and fresh.get("status") == "reserved"
-                    and fresh.get("reserveToken") == token):
-                self._send(409, json.dumps({
-                    "ok": False, "conflict": True,
-                    "claim": (fresh or {}).get("claim"),
-                }).encode())
-                return
-
-            out = json.dumps(d, indent=2).encode()
+            # Everything from here through the successful atomic_write is ONE
+            # release-guarded try/except (mirrors cmd_claim's Guard 3): if
+            # task_column, build_card, or atomic_write raises, we must release
+            # the reservation AND send a clean 500 - not let the exception
+            # escape inside _write_lock, which would drop the connection (no
+            # _send call reached) and strand the reservation until the 120s
+            # stale self-heal.
             try:
+                column = body.get("column") or tgcfg.task_column(d)
+                card = build_card(
+                    d,
+                    title=item["title"],
+                    column=column,
+                    tags=["from-telegram"],
+                    origin=item["text"],
+                    meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
+                                       "capturedAt": item.get("ts")}},
+                )
+                d["rev"] = int(d.get("rev", 0)) + 1
+                d["savedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                d["savedBy"] = "telegram"
+
+                # Pre-write ownership re-check: a stale-reservation takeover
+                # may have happened between reserve() above and here. Abort
+                # BEFORE writing if we no longer hold it - nothing has touched
+                # disk yet, and the reservation is no longer ours to release.
+                fresh = _inbox.get(tid)
+                if not (fresh and fresh.get("status") == "reserved"
+                        and fresh.get("reserveToken") == token):
+                    self._send(409, json.dumps({
+                        "ok": False, "conflict": True,
+                        "claim": (fresh or {}).get("claim"),
+                    }).encode())
+                    return
+
+                out = json.dumps(d, indent=2).encode()
                 atomic_write(bp, out)
             except Exception as e:
+                # A release() failure must never mask or replace the
+                # ORIGINAL error with its own.
                 try:
                     _inbox.release(tid, token)  # never strand a reservation
                 except Exception:
