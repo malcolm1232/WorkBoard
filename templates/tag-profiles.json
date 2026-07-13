@@ -25,7 +25,8 @@
       { "name": "correctness",   "color": "#7A6FB5" },
       { "name": "verify",        "color": "#5FA59A" },
       { "name": "dependency",    "color": "#B8965C" },
-      { "name": "breaking",      "color": "#A03030" }
+      { "name": "breaking",      "color": "#A03030" },
+      { "name": "from-telegram", "color": "#4A7BA5" }
     ]
   },
 
@@ -50,7 +51,8 @@
       { "name": "retargeting",   "color": "#5FA59A" },
       { "name": "lifecycle",     "color": "#B8956C" },
       { "name": "conversion",    "color": "#5A9F7A" },
-      { "name": "viral",         "color": "#C84B4B" }
+      { "name": "viral",         "color": "#C84B4B" },
+      { "name": "from-telegram", "color": "#4A7BA5" }
     ]
   },
 
@@ -74,7 +76,8 @@
       { "name": "code",          "color": "#3D8F65" },
       { "name": "supplementary", "color": "#B8956C" },
       { "name": "review",        "color": "#7A6FB5" },
-      { "name": "submission",    "color": "#C84B4B" }
+      { "name": "submission",    "color": "#C84B4B" },
+      { "name": "from-telegram", "color": "#4A7BA5" }
     ]
   },
 
@@ -98,7 +101,8 @@
       { "name": "hypothesis",  "color": "#7A6FB5" },
       { "name": "validation",  "color": "#3D8F65" },
       { "name": "beta",        "color": "#5C7CB8" },
-      { "name": "kill",        "color": "#8B3A3A" }
+      { "name": "kill",        "color": "#8B3A3A" },
+      { "name": "from-telegram", "color": "#4A7BA5" }
     ]
   },
 
@@ -122,7 +126,8 @@
       { "name": "policy",         "color": "#9B7AB5" },
       { "name": "incident",       "color": "#C84B4B" },
       { "name": "sla",            "color": "#B8956C" },
-      { "name": "report",         "color": "#3D8F65" }
+      { "name": "report",         "color": "#3D8F65" },
+      { "name": "from-telegram",  "color": "#4A7BA5" }
     ]
   }
 }

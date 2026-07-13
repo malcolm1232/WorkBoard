@@ -514,6 +514,20 @@
        paint — so the active-work box-shadow glow is never clipped at the edge. */
     contain: layout;
   }
+  /* #856 — virtual "From Telegram" column. Rendered as a detached DOM node
+     (never part of state.columns); dashed border marks it as not-a-real-column. */
+  .column.is-inbox { border: 1px dashed var(--border, #3a3a38); background: rgba(120,160,200,.05); }
+  .column.is-inbox .column-header { opacity: .9; }
+  .card.is-inbox { cursor: grab; border-left: 3px solid #4A7BA5; }
+  .card.is-inbox .num-ref { color: #4A7BA5; font-weight: 600; }
+  .card.is-inbox.is-aging { opacity: .55; }
+  .card.is-inbox .inbox-discard {
+    opacity: 0; margin-left: auto; padding: 0 4px; border: 0; background: none;
+    color: var(--muted, #8B8680); cursor: pointer; font-size: 13px; line-height: 1;
+  }
+  .card.is-inbox:hover .inbox-discard { opacity: .7; }
+  .card.is-inbox .inbox-discard:hover { opacity: 1; color: #C84B4B; }
+  .inbox-empty { padding: 10px 12px; color: var(--muted, #8B8680); font-size: 12px; line-height: 1.5; }
   /* Boho per-column hue tints (hue family at ~2% off-white). */
   /* #472 — column backgrounds are assigned in JS (colBohoBg): 'done' pinned to
      morning mist, all other columns recycle the boho palette by order. var(--col-bg)
@@ -1939,6 +1953,14 @@ let _colDragRects = null;      // id → DOMRect at dragstart (for FLIP)
 // DOM-moves the dragged element with FLIP animation for displaced siblings.
 // drop commits to state.cards; dragend without drop re-renders to revert.
 let _cardDrag = null;          // { cardId, srcCol, srcEl, hoverCol, hoverBeforeCardId }
+// #856 — shared phone-capture inbox. INBOX_COL is a VIRTUAL column id: it is
+// never written into state.columns, and inboxItems is never written into
+// state.cards. board.html persists by POSTing state wholesale (save()), so
+// anything pushed into state here would be written permanently into
+// board.json. Keep these completely separate from state.
+const INBOX_COL = '__inbox__';   // virtual: never written to state.columns / board.json
+let inboxItems = [];
+let inboxConfigured = false;
 let _cardDragRects = null;     // cardId → DOMRect at last reflow (for FLIP)
 let _localMoveLog = new Map(); // #518 — cardId→ts of moves logged directly, so the SSE echo doesn't double-log
 let _localEditLog = new Map(); // #548-redux — cardId→ts of local priority-chip clicks so an in-flight SSE echo can't clobber the local priority change during the 400ms scheduleSave window. Mirrors _localMoveLog for the edit path. Scoped to priority for now; title/tag edits would need their own stamps to opt in.
@@ -2942,6 +2964,10 @@ function reflowCardDragPreview() {
 // drag-order within a priority bucket.
 function commitCardDrag() {
   if (!_cardDrag) return;
+  // #856 — an inbox drag has no card in state.cards (it isn't a real card
+  // yet). Must come BEFORE the state.cards.find below, which would otherwise
+  // silently bail on the unknown id and drop the claim on the floor.
+  if (_cardDrag && _cardDrag.inboxTid) { commitInboxClaim(); return; }
   const card = state.cards.find(c => c.id === _cardDrag.cardId);
   if (!card) { _cardDrag = null; return; }
   pushUndo();
@@ -3804,6 +3830,14 @@ document.addEventListener('visibilitychange', () => {
     })
     .catch(() => { /* transient */ })
     .finally(() => { startSSE(); setStatus('live'); });
+  // #856 — the SSE stream just got closed above (this tab was hidden) and any
+  // inbox-updated broadcast that fired during that window is gone for good
+  // (EventSource doesn't replay missed messages). window 'focus' does NOT fire
+  // on a same-window tab switch in Chrome/Firefox (only visibilitychange does),
+  // so relying on focus alone leaves the virtual column stale until the NEXT
+  // live change. Mirror the board resync above: catch up on every hide→show,
+  // not just a real window focus.
+  fetchInbox();
 });
 
 // ===== Subtask tree helpers =====
@@ -5515,6 +5549,9 @@ function render() {
       scheduleSave(); render();
     };
     board.appendChild(addCol);
+    // #856 — board.innerHTML was just wiped above; re-attach the virtual
+    // inbox column (a detached DOM node, never part of state.columns).
+    renderInboxColumn();
   } else if (_view === 'calendar') {
     renderCalendar();
   }
@@ -6396,6 +6433,148 @@ function _onCalDayModalKey(e) {
   if (_openCardId) return;
   e.preventDefault();
   closeCalDayModal();
+}
+
+// #856 — shared phone-capture inbox: fetch + render + claim + discard.
+// The virtual column is a DETACHED DOM node (#inbox-column), built and
+// inserted directly into #board here — never routed through renderColumn /
+// buildColumnStacks, and never added to state.columns. inboxItems is its
+// own module-global array, never merged into state.cards. See the note by
+// INBOX_COL above: state gets POSTed wholesale on save(), so this separation
+// is what keeps a phone capture from being written permanently into
+// board.json before the user has claimed it onto a real column.
+async function fetchInbox() {
+  try {
+    const r = await fetch(apiBase + '/inbox');
+    if (!r.ok) return;
+    const data = await r.json();
+    inboxItems = data.items || [];
+    inboxConfigured = !!data.configured;
+    renderInboxColumn();
+  } catch (_) { /* board offline: the column just stays as it was */ }
+}
+
+function inboxAgeDays(ts) {
+  const t = Date.parse(ts);
+  return Number.isNaN(t) ? 0 : (Date.now() - t) / 86400000;
+}
+
+function renderInboxCard(item) {
+  const el = document.createElement('div');
+  el.className = 'card is-inbox' + (inboxAgeDays(item.ts) > 7 ? ' is-aging' : '');
+  el.dataset.inboxTid = item.tid;
+  el.draggable = true;
+
+  const head = document.createElement('div');
+  head.className = 'card-head';
+  const ref = document.createElement('span');
+  ref.className = 'num-ref';
+  ref.textContent = item.tid;
+  head.appendChild(ref);
+
+  const x = document.createElement('button');
+  x.className = 'inbox-discard';
+  x.title = 'Discard this capture';
+  x.textContent = '×';
+  x.addEventListener('click', (e) => { e.stopPropagation(); discardInboxItem(item.tid); });
+  head.appendChild(x);
+  el.appendChild(head);
+
+  const title = document.createElement('div');
+  title.className = 'card-title clamp';
+  title.textContent = item.title;
+  el.appendChild(title);
+
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', 'inbox:' + item.tid);
+    _cardDrag = {
+      inboxTid: item.tid, cardId: null, srcCol: INBOX_COL, srcEl: el,
+      hoverCol: null, hoverBeforeCardId: null,
+    };
+    el.classList.add('dragging');
+  });
+  el.addEventListener('dragend', () => {
+    el.classList.remove('dragging');
+    if (_cardDrag && _cardDrag.inboxTid) cancelCardDrag();
+  });
+  return el;
+}
+
+function renderInboxColumn() {
+  const boardEl = document.getElementById('board');
+  if (!boardEl) return;
+  const existing = document.getElementById('inbox-column');
+  if (!inboxConfigured && !inboxItems.length) { if (existing) existing.remove(); return; }
+
+  const col = document.createElement('div');
+  col.className = 'column is-inbox';
+  col.id = 'inbox-column';
+  col.dataset.col = INBOX_COL;
+
+  const header = document.createElement('div');
+  header.className = 'column-header';
+  header.textContent = `📥 From Telegram (${inboxItems.length})`;
+  col.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'column-body';
+  if (!inboxItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inbox-empty';
+    empty.textContent = 'Send a link to your bot from your phone; it lands here.';
+    body.appendChild(empty);
+  } else {
+    inboxItems.forEach((it) => body.appendChild(renderInboxCard(it)));
+  }
+  col.appendChild(body);
+
+  // Real cards may not be dropped INTO the virtual column: it is not a real column.
+  col.addEventListener('dragover', (e) => {
+    if (_cardDrag && _cardDrag.inboxTid) e.preventDefault();
+  });
+
+  if (existing) existing.replaceWith(col);
+  else boardEl.insertBefore(col, boardEl.firstChild);
+}
+
+async function commitInboxClaim() {
+  const tid = _cardDrag && _cardDrag.inboxTid;
+  const column = _cardDrag && _cardDrag.hoverCol;
+  _cardDrag = null;
+  if (!tid || !column || column === INBOX_COL) { renderInboxColumn(); return; }
+  try {
+    const r = await fetch(apiBase + '/inbox/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tid, column }),
+    });
+    const data = await r.json();
+    if (r.status === 409) {
+      const c = data.claim || {};
+      toast(`Already claimed elsewhere (#${c.cardNum || '?'})`);
+    } else if (r.ok) {
+      toast(`Claimed ${tid} → #${data.card.num}`);
+      // The real card arrives over SSE (card-added); just drop it from the virtual column.
+    } else {
+      toast('Could not claim that capture');
+    }
+  } catch (_) {
+    toast('Could not claim that capture');
+  }
+  fetchInbox();
+}
+
+async function discardInboxItem(tid) {
+  try {
+    await fetch(apiBase + '/inbox/discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tid }),
+    });
+    toast(`Discarded ${tid}`);
+  } catch (_) { /* ignore */ }
+  fetchInbox();
 }
 
 function renderColumn(col, cards) {
@@ -7748,6 +7927,19 @@ function startSSE() {
   _es.addEventListener('column-removed', e => handleColumnRemoved(JSON.parse(e.data)));
   _es.addEventListener('column-renamed', e => handleColumnRenamed(JSON.parse(e.data)));
   _es.addEventListener('rev-bumped',     e => handleRevBumped(JSON.parse(e.data)));
+  // #856 — shared phone-capture inbox. The server broadcasts the FULL
+  // unclaimed list on every add/claim/discard; just replace inboxItems
+  // wholesale (never state) and re-render the virtual column. Defers like
+  // every other live SSE handler if a drag is in progress, so a mid-drag
+  // resync can't rebuild the DOM out from under the user's cursor.
+  _es.addEventListener('inbox-updated', e => {
+    try {
+      const d = JSON.parse(e.data);
+      inboxItems = d.items || [];
+      if (isDragInProgress()) { _pendingResync = true; return; }
+      renderInboxColumn();
+    } catch (_) { /* ignore */ }
+  });
   _es.addEventListener('extract_progress', e => {        // #318 BOARD-LOAD HUD
     try {
       const d = JSON.parse(e.data);
@@ -8033,6 +8225,8 @@ async function init() {
     startSSE();
     startPoll();
     startSSEWatchdog();   // #526 — re-open a terminally-dead stream while visible
+    fetchInbox();         // #856 — first paint of the virtual "From Telegram" column
+    window.addEventListener('focus', fetchInbox);   // #856 — catch captures made while the tab was away
   } catch (e) {
     $('#setup-err').textContent =
       'Could not reach board server: ' + (e.message || e) +
