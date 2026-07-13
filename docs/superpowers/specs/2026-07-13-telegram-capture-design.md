@@ -61,7 +61,9 @@ Session start: hook injects "N unclaimed captures (oldest Xd)" + catch-up poll
 - At-least-once delivery with dedupe by Telegram `update_id`; re-polling after a crash is safe.
 - Parses a leading `#<board-alias>` token into a `routeHint` field; the hint is stored, not executed here.
 - Alias resolution is per user and never hardcoded. Aliases derive from the user's own board registry (`~/.board-steward/port-assignments.json`): each board path's project folder name, slugified (e.g. `.../TradingResearch/board` -> `#tradingresearch`). Unambiguous prefixes also match (`#trading`). Users can add custom short aliases in `telegram.json` (e.g. `"qm" -> .../HFTAgents/board`) via setup or a `card.py telegram-alias` subcommand; custom aliases win over derived ones. Ambiguous or unknown alias -> hint ignored, item stays in the global column (never guess).
-- The confirmation reply echoes the resolution ("saved -> qm" vs plain "saved") so the user knows from the phone whether the hint landed.
+- The confirmation reply echoes the resolution ("saved -> qm #431" vs plain "saved") so the user knows from the phone whether the hint landed.
+- The poller executes a resolved hint by invoking `card.py claim <tid> --board <path>`, the single sanctioned board-write path (it already routes the write through the running server, so the card flies in live). The poller itself never writes board.json. An unresolvable or ambiguous alias is ignored and the item stays in the global column.
+- routeHint fallbacks: the hinted board's `task` column is used, falling back to the first task-like column, then to the board's first column.
 
 ### `card.py telegram-setup` (new subcommand)
 
@@ -80,8 +82,7 @@ Session start: hook injects "N unclaimed captures (oldest Xd)" + catch-up poll
 - `POST /api/inbox/claim {tid, column}`: flock -> verify still unclaimed -> create a real card in THIS board via the existing card-create path (tag `from-telegram`, origin = verbatim message, title = message text or URL) -> mark item claimed -> 200 with the new card number. If already claimed: 409 with the winning `board + cardNum`.
 - `POST /api/inbox/discard {tid}`: mark discarded.
 - SSE nudge on claim/discard so other open boards drop the item live.
-- Executes pending `routeHint` items lazily on render: a hinted item targeting a known board is claimed into that board's task column automatically. Lazy execution means the poller never writes board.json files.
-- routeHint fallbacks: if the hinted board has no task-like column, the item is claimed into that board's first column; if the alias matches no registered board, the hint is ignored and the item stays in the global column.
+- routeHint execution moved to the poller (see below). The server's `GET /inbox` is a pure read with no side effects.
 
 ### `board.html` (extend)
 
