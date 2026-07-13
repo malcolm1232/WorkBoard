@@ -514,10 +514,18 @@
        paint — so the active-work box-shadow glow is never clipped at the edge. */
     contain: layout;
   }
-  /* #856 — virtual "From Telegram" column. Rendered as a detached DOM node
-     (never part of state.columns); dashed border marks it as not-a-real-column. */
-  .column.is-inbox { border: 1px dashed var(--border, #3a3a38); background: rgba(120,160,200,.05); }
+  /* #856 - virtual "From Telegram" column. Rendered as a detached DOM node
+     (never part of state.columns); dashed border marks it as not-a-real-column.
+     #board lays columns out with align-items: flex-start, so every column
+     (real or virtual) is content-height by default; a virtual column with only
+     one or two captures then hugs that tiny content and floats as a stray card
+     holder next to full-length real columns. align-self: stretch opts this one
+     column back into filling #board's full height (like a real column does once
+     its own content/scroll fills the row), while the dashed border (kept as-is)
+     still marks it as not-a-real-column. */
+  .column.is-inbox { border: 1px dashed var(--border, #3a3a38); background: rgba(120,160,200,.05); align-self: stretch; }
   .column.is-inbox .column-header { opacity: .9; }
+  .column.is-inbox .name { cursor: default; }
   .card.is-inbox { cursor: grab; border-left: 3px solid #4A7BA5; }
   .card.is-inbox .num-ref { color: #4A7BA5; font-weight: 600; }
   .card.is-inbox.is-aging { opacity: .55; }
@@ -1953,7 +1961,7 @@ let _colDragRects = null;      // id → DOMRect at dragstart (for FLIP)
 // DOM-moves the dragged element with FLIP animation for displaced siblings.
 // drop commits to state.cards; dragend without drop re-renders to revert.
 let _cardDrag = null;          // { cardId, srcCol, srcEl, hoverCol, hoverBeforeCardId }
-// #856 — shared phone-capture inbox. INBOX_COL is a VIRTUAL column id: it is
+// #856 - shared phone-capture inbox. INBOX_COL is a VIRTUAL column id: it is
 // never written into state.columns, and inboxItems is never written into
 // state.cards. board.html persists by POSTing state wholesale (save()), so
 // anything pushed into state here would be written permanently into
@@ -2964,7 +2972,7 @@ function reflowCardDragPreview() {
 // drag-order within a priority bucket.
 function commitCardDrag() {
   if (!_cardDrag) return;
-  // #856 — an inbox drag has no card in state.cards (it isn't a real card
+  // #856 - an inbox drag has no card in state.cards (it isn't a real card
   // yet). Must come BEFORE the state.cards.find below, which would otherwise
   // silently bail on the unknown id and drop the claim on the floor.
   if (_cardDrag && _cardDrag.inboxTid) { commitInboxClaim(); return; }
@@ -3830,7 +3838,7 @@ document.addEventListener('visibilitychange', () => {
     })
     .catch(() => { /* transient */ })
     .finally(() => { startSSE(); setStatus('live'); });
-  // #856 — the SSE stream just got closed above (this tab was hidden) and any
+  // #856 - the SSE stream just got closed above (this tab was hidden) and any
   // inbox-updated broadcast that fired during that window is gone for good
   // (EventSource doesn't replay missed messages). window 'focus' does NOT fire
   // on a same-window tab switch in Chrome/Firefox (only visibilitychange does),
@@ -5549,7 +5557,7 @@ function render() {
       scheduleSave(); render();
     };
     board.appendChild(addCol);
-    // #856 — board.innerHTML was just wiped above; re-attach the virtual
+    // #856 - board.innerHTML was just wiped above; re-attach the virtual
     // inbox column (a detached DOM node, never part of state.columns).
     renderInboxColumn();
   } else if (_view === 'calendar') {
@@ -6435,9 +6443,9 @@ function _onCalDayModalKey(e) {
   closeCalDayModal();
 }
 
-// #856 — shared phone-capture inbox: fetch + render + claim + discard.
+// #856 - shared phone-capture inbox: fetch + render + claim + discard.
 // The virtual column is a DETACHED DOM node (#inbox-column), built and
-// inserted directly into #board here — never routed through renderColumn /
+// inserted directly into #board here - never routed through renderColumn /
 // buildColumnStacks, and never added to state.columns. inboxItems is its
 // own module-global array, never merged into state.cards. See the note by
 // INBOX_COL above: state gets POSTed wholesale on save(), so this separation
@@ -6514,7 +6522,17 @@ function renderInboxColumn() {
 
   const header = document.createElement('div');
   header.className = 'column-header';
-  header.textContent = `📥 From Telegram (${inboxItems.length})`;
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = '📥 From Telegram';
+  header.appendChild(nameEl);
+
+  const count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = inboxItems.length;
+  header.appendChild(count);
+
   col.appendChild(header);
 
   const body = document.createElement('div');
@@ -6529,7 +6547,11 @@ function renderInboxColumn() {
   }
   col.appendChild(body);
 
-  // Real cards may not be dropped INTO the virtual column: it is not a real column.
+  // This dragover only lets the browser show a valid drop cursor while an inbox
+  // capture is being dragged back over its own column; it does not accept drops.
+  // The actual protection against a real card landing here is structural: unlike
+  // renderColumn's el, this column never registers a 'drop' listener, so nothing
+  // ever commits a card into the virtual column no matter what dragover allows.
   col.addEventListener('dragover', (e) => {
     if (_cardDrag && _cardDrag.inboxTid) e.preventDefault();
   });
@@ -6541,7 +6563,17 @@ function renderInboxColumn() {
 async function commitInboxClaim() {
   const tid = _cardDrag && _cardDrag.inboxTid;
   const column = _cardDrag && _cardDrag.hoverCol;
+  const srcEl = _cardDrag && _cardDrag.srcEl;
   _cardDrag = null;
+  // reflowCardDragPreview's dragover handling physically relocates srcEl (the
+  // inbox card's own DOM node) into the target column as the live preview. For
+  // a REAL card drag that node stays as the final element, so commitCardDrag
+  // deliberately skips render(). An inbox claim is different: the final result
+  // is a brand-new element built from the server's response over SSE (or, on
+  // failure, a freshly rebuilt inbox column below) - srcEl is never reused.
+  // Detach it now so neither path leaves this stale ghost sitting duplicated
+  // in whatever column it was last dragged over.
+  if (srcEl && srcEl.parentNode) srcEl.remove();
   if (!tid || !column || column === INBOX_COL) { renderInboxColumn(); return; }
   try {
     const r = await fetch(apiBase + '/inbox/claim', {
@@ -6567,13 +6599,21 @@ async function commitInboxClaim() {
 
 async function discardInboxItem(tid) {
   try {
-    await fetch(apiBase + '/inbox/discard', {
+    const r = await fetch(apiBase + '/inbox/discard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tid }),
     });
-    toast(`Discarded ${tid}`);
-  } catch (_) { /* ignore */ }
+    if (r.ok) {
+      toast(`Discarded ${tid}`);
+    } else if (r.status === 404 || r.status === 409) {
+      toast(`${tid} is already claimed or gone`);
+    } else {
+      toast('Could not discard that capture');
+    }
+  } catch (_) {
+    toast('Could not discard that capture');
+  }
   fetchInbox();
 }
 
@@ -7927,7 +7967,7 @@ function startSSE() {
   _es.addEventListener('column-removed', e => handleColumnRemoved(JSON.parse(e.data)));
   _es.addEventListener('column-renamed', e => handleColumnRenamed(JSON.parse(e.data)));
   _es.addEventListener('rev-bumped',     e => handleRevBumped(JSON.parse(e.data)));
-  // #856 — shared phone-capture inbox. The server broadcasts the FULL
+  // #856 - shared phone-capture inbox. The server broadcasts the FULL
   // unclaimed list on every add/claim/discard; just replace inboxItems
   // wholesale (never state) and re-render the virtual column. Defers like
   // every other live SSE handler if a drag is in progress, so a mid-drag
@@ -8225,8 +8265,8 @@ async function init() {
     startSSE();
     startPoll();
     startSSEWatchdog();   // #526 — re-open a terminally-dead stream while visible
-    fetchInbox();         // #856 — first paint of the virtual "From Telegram" column
-    window.addEventListener('focus', fetchInbox);   // #856 — catch captures made while the tab was away
+    fetchInbox();         // #856 - first paint of the virtual "From Telegram" column
+    window.addEventListener('focus', fetchInbox);   // #856 - catch captures made while the tab was away
   } catch (e) {
     $('#setup-err').textContent =
       'Could not reach board server: ' + (e.message || e) +
