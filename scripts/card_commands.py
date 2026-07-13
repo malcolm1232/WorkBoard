@@ -1619,21 +1619,54 @@ def cmd_inbox(args, d, board):
 def cmd_claim(args, d, board):
     """Promote an inbox capture to a real card on THIS board.
 
-    Reserve -> build the card -> save -> finalize. `_inbox.reserve` is the
-    atomic CAS that makes a double-claim impossible: it raises InboxConflict
-    if the item is already reserved/claimed by someone else, and this never
-    falls back to silently creating a second card. If the board save fails
-    (before it has landed), the reservation is released so the item stays
-    claimable (no stranded reservation).
+    Reserve -> duplicate-guard -> build the card -> re-verify ownership ->
+    save -> finalize. `_inbox.reserve` is the atomic CAS that makes a
+    double-claim impossible: it raises InboxConflict if the item is already
+    reserved/claimed by someone else, and this never falls back to silently
+    creating a second card.
 
-    #856 review CRITICAL 1 — the rollback is scoped precisely: only a failure
-    of build_card/atomic_save may release the reservation. Once atomic_save
-    has returned, the card is durable, and the reservation is NEVER released
-    again - not even if `finalize` itself fails - because releasing it would
-    let a human retry create a second card for the same capture. A finalize
-    failure instead prints a warning naming the created card and exits
-    non-zero, without crashing, so the operator knows the item may reappear
-    in the inbox instead of silently losing track of it.
+    True two-file (inbox + board) atomicity isn't achievable without a
+    journal, so three layers close the gap instead:
+
+      1. SAME-BOARD DUPLICATE GUARD - before building anything, scan THIS
+         board for a card whose meta.telegram.tid already equals this tid
+         (e.g. left over from an earlier claim whose finalize failed after
+         the card was already durable, and the operator is retrying after
+         the reservation went stale). If found, refuse outright - a
+         same-board duplicate is impossible regardless of any race.
+
+      2. PRE-SAVE OWNERSHIP RE-CHECK - `_inbox`'s stale-reservation self-heal
+         (STALE_RESERVE_S) exists so a crashed claimer can't strand a
+         capture forever, but it also means a claimer that merely stalled
+         (laptop sleep, slow disk) for over STALE_RESERVE_S can legally be
+         taken over by another claimer while it is still mid-flight. Without
+         a re-check, that stalled claimer would go on to build+save its OWN
+         card after being taken over, producing two real cards for one
+         capture on two different boards, undetected. Re-reading the item
+         right before atomic_save shrinks that window from "over
+         STALE_RESERVE_S seconds" to the microseconds between the read and
+         the write; if we WERE taken over, we abort before writing anything
+         and name the board and card number that won (from the winner's
+         `.claim`).
+
+      3. HONEST FINALIZE-FAILURE REPORTING - once atomic_save has returned,
+         our own card is durable and the reservation is NEVER released again
+         (releasing it would let a retry legally create a second card). If
+         `finalize` then fails, the message tells the truth about which case
+         we're in: an InboxConflict carrying `.claim` means we were taken
+         over AFTER our own save landed (the residual race below) and the
+         card just created here really is a duplicate that should be
+         deleted; any other failure (lock timeout, or an InboxConflict with
+         no `.claim`) means the item is still genuinely ours and may
+         reappear in the inbox.
+
+    Residual race: between step 2's re-check and `finalize()` actually
+    landing (which includes the save itself), a takeover is still
+    theoretically possible - true cross-process atomicity across two
+    independent files would need a journal/2PC. That window is now on the
+    order of a single file write, not up to STALE_RESERVE_S seconds, and if
+    it's ever hit, step 3 reports it truthfully instead of silently
+    duplicating.
     """
     import _inbox
     import _tg_config as cfg
@@ -1657,6 +1690,21 @@ def cmd_claim(args, d, board):
         sys.exit(f"error: {e}")
 
     token = item["reserveToken"]
+
+    # Guard 1 — same-board duplicate (see docstring). Independent of any
+    # race: refuse to create a second card for a tid this board already has.
+    existing = next(
+        (c for c in d.get("cards", [])
+         if ((c.get("meta") or {}).get("telegram") or {}).get("tid") == tid),
+        None,
+    )
+    if existing is not None:
+        try:
+            _inbox.release(tid, token)  # best-effort; nothing was written here
+        except Exception:
+            pass
+        sys.exit(f"error: {tid} already has a card on this board -> #{existing['num']}")
+
     col = args.column or cfg.task_column(d)
     try:
         # Tags on a Telegram capture are deliberately unvalidated: build_card
@@ -1674,9 +1722,36 @@ def cmd_claim(args, d, board):
         )
         _set_active_work(d, card, "", col)
         _record_move(card, None, col)
+
+        # Guard 2 — pre-save ownership re-check (see docstring). Nothing has
+        # been written yet: build_card only mutated the in-memory `d`, which
+        # is simply discarded (atomic_save below is never reached) on abort.
+        fresh = _inbox.get(tid)
+        if not (fresh and fresh.get("status") == "reserved"
+                and fresh.get("reserveToken") == token):
+            winner = (fresh or {}).get("claim")
+            if winner:
+                sys.exit(
+                    f"error: {tid}'s reservation was taken over while claiming - "
+                    f"another claimer already finalized it as "
+                    f"{winner.get('board')} #{winner.get('cardNum')}. "
+                    f"Not saving a duplicate card here."
+                )
+            sys.exit(
+                f"error: {tid}'s reservation was taken over while claiming "
+                f"(no winner recorded yet). Not saving a duplicate card here."
+            )
+
         rev = atomic_save(board, d)
     except Exception:
-        _inbox.release(tid, token)  # never strand a reservation
+        # Guard 3 — a release() failure (the reservation was already taken
+        # over, e.g. atomic_save raised right as another claimer won the
+        # race) must never mask or replace the ORIGINAL exception with
+        # release()'s own InboxConflict.
+        try:
+            _inbox.release(tid, token)  # never strand a reservation
+        except Exception:
+            pass
         raise
 
     # From here on the card is durable (atomic_save returned) - the
@@ -1689,6 +1764,19 @@ def cmd_claim(args, d, board):
     try:
         _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"], token=token)
         _inbox.notify_boards()
+    except _inbox.InboxConflict as e:
+        if e.claim:
+            print(f"warning: card #{card['num']} was created, but {tid} was taken over "
+                  f"and already finalized by {e.claim.get('board')} "
+                  f"#{e.claim.get('cardNum')} - card #{card['num']} here is a DUPLICATE "
+                  f"of that one and should be deleted.",
+                  file=sys.stderr)
+        else:
+            print(f"warning: card #{card['num']} was created but {tid} could not be marked "
+                  f"claimed ({e}); it may reappear in the inbox - if it does, claiming it "
+                  f"again will create a duplicate card, so check first before re-claiming.",
+                  file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"warning: card #{card['num']} was created but {tid} could not be marked "
               f"claimed ({e}); it may reappear in the inbox - if it does, claiming it again "
