@@ -177,53 +177,76 @@ def counts() -> dict:
     return {"unclaimed": len(free), "oldest_age_days": oldest}
 
 
-def _mutate(tid: str, fn) -> dict:
-    with _locked():
-        items = _read()
-        for idx, item in enumerate(items):
-            if item["tid"] == tid:
-                items[idx] = fn(item)
-                _write(items)
-                return items[idx]
-        raise KeyError(f"no inbox item {tid}")
+def _mutate_if(tid: str, predicate, fn, conflict_msg) -> dict:
+    """Mutate item `tid` with `fn` iff `predicate(item)` holds, inside the flock.
 
-
-def reserve(tid: str) -> dict:
-    """Atomic CAS: unclaimed -> reserved. First caller wins; the rest raise."""
+    The predicate is checked and the write happens under the same lock
+    acquisition, so a concurrent process can never observe (or act on) a
+    state between the check and the write. Raises InboxConflict (carrying
+    the item's current `.claim`) when the predicate fails, KeyError if the
+    tid doesn't exist.
+    """
     with _locked():
         items = _read()
         for idx, item in enumerate(items):
             if item["tid"] != tid:
                 continue
-            if not _is_free(item):
-                raise InboxConflict(
-                    f"{tid} is already {item.get('status')}", item.get("claim")
-                )
-            item = dict(item, status="reserved", reservedAt=time.time())
-            items[idx] = item
+            if not predicate(item):
+                raise InboxConflict(conflict_msg(item), item.get("claim"))
+            items[idx] = fn(item)
             _write(items)
-            return item
+            return items[idx]
         raise KeyError(f"no inbox item {tid}")
 
 
-def finalize(tid: str, board: str, card_num: int) -> dict:
-    return _mutate(
+def reserve(tid: str) -> dict:
+    """Atomic CAS: unclaimed -> reserved. First caller wins; the rest raise."""
+    return _mutate_if(
         tid,
+        _is_free,
+        lambda i: dict(i, status="reserved", reservedAt=time.time()),
+        lambda i: f"{tid} is already {i.get('status')}",
+    )
+
+
+def finalize(tid: str, board: str, card_num: int) -> dict:
+    """reserved -> claimed. Raises InboxConflict if the item isn't reserved."""
+    return _mutate_if(
+        tid,
+        lambda i: i.get("status") == "reserved",
         lambda i: dict(
             i,
             status="claimed",
             reservedAt=None,
             claim={"board": board, "cardNum": card_num, "ts": _now()},
         ),
+        lambda i: f"{tid} is not reserved (status={i.get('status')})",
     )
 
 
 def release(tid: str) -> dict:
-    return _mutate(tid, lambda i: dict(i, status="unclaimed", reservedAt=None))
+    """reserved -> unclaimed, for rollback. Raises InboxConflict if not reserved."""
+    return _mutate_if(
+        tid,
+        lambda i: i.get("status") == "reserved",
+        lambda i: dict(i, status="unclaimed", reservedAt=None),
+        lambda i: f"{tid} is not reserved (status={i.get('status')})",
+    )
 
 
 def discard(tid: str) -> dict:
-    return _mutate(tid, lambda i: dict(i, status="discarded", reservedAt=None))
+    """unclaimed or reserved -> discarded.
+
+    Raises InboxConflict if the item is already claimed (discarding a
+    claimed item would detach a live card's provenance) or already
+    discarded.
+    """
+    return _mutate_if(
+        tid,
+        lambda i: i.get("status") in ("unclaimed", "reserved"),
+        lambda i: dict(i, status="discarded", reservedAt=None),
+        lambda i: f"{tid} cannot be discarded (status={i.get('status')})",
+    )
 
 
 def notify_boards() -> None:
