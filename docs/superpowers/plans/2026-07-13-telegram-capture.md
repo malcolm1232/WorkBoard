@@ -55,9 +55,9 @@
   - `append(text: str, update_id: int, ts: str | None = None) -> dict | None` (returns `None` if `update_id` already present; parses the leading `#alias` into `routeHint` and the stripped `title`)
   - `unclaimed() -> list[dict]` (includes items stuck in `reserved` for more than `STALE_RESERVE_S`)
   - `get(tid: str) -> dict | None`
-  - `reserve(tid: str) -> dict` (atomic CAS `unclaimed -> reserved`; raises `InboxConflict` if already claimed or freshly reserved)
-  - `finalize(tid: str, board: str, card_num: int) -> dict` (`reserved -> claimed`)
-  - `release(tid: str) -> dict` (`reserved -> unclaimed`, for rollback)
+  - `reserve(tid: str) -> dict` (atomic CAS `unclaimed -> reserved`; raises `InboxConflict` if already claimed or freshly reserved; the returned item carries a `reserveToken`)
+  - `finalize(tid: str, board: str, card_num: int, token: str) -> dict` (`reserved -> claimed`; the token must match the one `reserve` minted)
+  - `release(tid: str, token: str) -> dict` (`reserved -> unclaimed`, for rollback)
   - `discard(tid: str) -> dict`
   - `counts() -> dict` with keys `unclaimed: int`, `oldest_age_days: float | None`
   - `notify_boards() -> None` (best-effort `POST /inbox/notify` to every live board; never raises)
@@ -1664,6 +1664,7 @@ def cmd_claim(args, d, board):
         where = f" -> {claim.get('board')} #{claim.get('cardNum')}" if claim else ""
         sys.exit(f"error: {tid} is already claimed{where}")
 
+    token = item["reserveToken"]
     col = args.column or cfg.task_column(d)
     try:
         card = build_card(
@@ -1679,10 +1680,10 @@ def cmd_claim(args, d, board):
         _record_move(card, None, col)
         rev = atomic_save(board, d)
     except Exception:
-        _inbox.release(tid)  # never strand a reservation
+        _inbox.release(tid, token)  # never strand a reservation
         raise
 
-    _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"])
+    _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"], token=token)
     _inbox.notify_boards()
     print(f"+ #{card['num']} {card['title'][:50]} -> {col}  (rev {rev}, from telegram {tid})")
 
@@ -2098,6 +2099,7 @@ Add these methods to `BoardHandler`, immediately after `_handle_boards` (around 
                 {"ok": False, "conflict": True, "claim": e.claim}).encode())
             return
 
+        token = item["reserveToken"]
         bp = self.board_dir / "board.json"
         try:
             with _boardio.board_lock(bp):
@@ -2121,11 +2123,11 @@ Add these methods to `BoardHandler`, immediately after `_handle_boards` (around 
                 regen_index(self.board_dir)
                 _refresh_cache(self.board_dir)
         except Exception as e:
-            _inbox.release(tid)  # never strand a reservation
+            _inbox.release(tid, token)  # never strand a reservation
             self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
             return
 
-        _inbox.finalize(tid, board=str(self.board_dir), card_num=card["num"])
+        _inbox.finalize(tid, board=str(self.board_dir), card_num=card["num"], token=token)
         broadcast("card-added", {"card": card})
         broadcast("rev-bumped", {"rev": d["rev"], "savedBy": "telegram",
                                  "savedAt": d["savedAt"], "activeWork": d.get("activeWork")})
