@@ -252,13 +252,29 @@ def _session_id():
     return port_registry.session_id()
 
 
+def _active_work_map(d: dict) -> dict:
+    """d['activeWork'] as a dict, normalizing a JSON `null` to {} in place.
+
+    `d.setdefault("activeWork", {})` alone is not enough: setdefault only
+    fills a MISSING key, but a freshly bootstrapped board ships the key
+    already present with value null (see templates/board.json) - so the
+    very first card added to a new board would find aw=None and blow up on
+    `sid in aw` below. Normalize here, once, so every caller gets a real dict.
+    """
+    aw = d.get("activeWork")
+    if aw is None:
+        aw = {}
+        d["activeWork"] = aw
+    return aw
+
+
 def _migrate_active_work(d, now_ms):
     """One-time lift of the legacy scalar activeWorkId into the per-session map
     under a synthetic '_legacy' key, then drop the scalar (back-compat for a
     board.json written before #608)."""
     legacy = d.pop("activeWorkId", None)
     if legacy:
-        aw = d.setdefault("activeWork", {})
+        aw = _active_work_map(d)
         if not any((e or {}).get("cardId") == legacy for e in aw.values()):
             aw["_legacy"] = {"cardId": legacy, "ts": now_ms}
 
@@ -293,7 +309,7 @@ def _set_active_work(d, card, old_col, new_col):
     sessions' pulses are untouched."""
     now_ms = _now_ms()
     _migrate_active_work(d, now_ms)
-    aw = d.setdefault("activeWork", {})
+    aw = _active_work_map(d)
     sid = _session_id()
     if new_col == "inprogress" and old_col != "inprogress":
         aw[sid] = {"cardId": card["id"], "ts": now_ms}
@@ -1582,3 +1598,158 @@ def cmd_export(args, d, board):
         print(f"exported {fmt} snapshot → {args.to} ({len(body)} bytes, rev {d.get('rev', 0)})")
     else:
         print(body)
+
+
+# ===== Telegram capture: inbox / claim / setup / alias (#856 Task 5) =====
+
+def cmd_inbox(args, d, board):
+    """List unclaimed phone captures (read-only)."""
+    import _inbox
+
+    items = _inbox.unclaimed()
+    if not items:
+        print("inbox empty - nothing captured from Telegram")
+        return
+    for i in items:
+        hint = f"  [#{i['routeHint']}]" if i.get("routeHint") else ""
+        print(f"{i['tid']:>6}  {i['ts']}  {i['title'][:60]}{hint}")
+    print(f"\n{len(items)} unclaimed - claim with `card.py claim <T-n> [--column <col>]`")
+
+
+def cmd_claim(args, d, board):
+    """Promote an inbox capture to a real card on THIS board.
+
+    Reserve -> build the card -> save -> finalize. `_inbox.reserve` is the
+    atomic CAS that makes a double-claim impossible: it raises InboxConflict
+    if the item is already reserved/claimed by someone else, and this never
+    falls back to silently creating a second card. If the board save fails
+    after reserving, the reservation is released so the item stays claimable
+    (no stranded reservation).
+    """
+    import _inbox
+    import _tg_config as cfg
+
+    tid = args.tid
+    item = _inbox.get(tid)
+    if not item:
+        sys.exit(f"error: no inbox item {tid}")
+
+    try:
+        item = _inbox.reserve(tid)
+    except _inbox.InboxConflict as e:
+        claim = e.claim or {}
+        where = f" -> {claim.get('board')} #{claim.get('cardNum')}" if claim else ""
+        sys.exit(f"error: {tid} is already claimed{where}")
+
+    token = item["reserveToken"]
+    col = args.column or cfg.task_column(d)
+    try:
+        # Tags on a Telegram capture are deliberately unvalidated: build_card
+        # does not check them against the taxonomy, and this path must not
+        # call _check_tags either - a phone capture shouldn't be blocked (or
+        # silently stripped) by a taxonomy the user never sees while texting.
+        card = build_card(
+            d,
+            title=item["title"],
+            column=col,
+            tags=["from-telegram"],
+            origin=item["text"],
+            meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
+                               "capturedAt": item.get("ts")}},
+        )
+        _set_active_work(d, card, "", col)
+        _record_move(card, None, col)
+        rev = atomic_save(board, d)
+    except Exception:
+        _inbox.release(tid, token)  # never strand a reservation
+        raise
+
+    _inbox.finalize(tid, board=str(Path(board).parent), card_num=card["num"], token=token)
+    _inbox.notify_boards()
+    # The poller anchors `^\+\s*#(\d+)` on this line (telegram_poller._claim_hint)
+    # to echo the new card number back to the phone - keep this exact shape.
+    print(f"+ #{card['num']} {card['title'][:50]} -> {col}  (rev {rev}, from telegram {tid})")
+
+
+def cmd_telegram_setup(args):
+    """One-time wizard: connect a Telegram bot to this machine. Board-less
+    (like board-new): dispatched in main() before find_board() runs."""
+    import _tg_config as cfg
+    import telegram_poller
+
+    # Preserve any existing custom aliases across a re-run (e.g. rotating the
+    # bot token): the final save() below writes a whole new config object, so
+    # without this a re-setup would silently wipe out aliases the user set
+    # with `card.py telegram-alias`.
+    existing = cfg.load() or {}
+
+    print("Telegram capture setup")
+    print("  1. In Telegram, message @BotFather and send: /newbot")
+    print("  2. Pick a name; BotFather replies with a token like 123456:ABC-DEF...")
+    token = (args.token or input("  Paste the token: ")).strip()
+    if not token or ":" not in token:
+        sys.exit("error: that does not look like a bot token")
+
+    print("  3. Now open your new bot in Telegram and send it any message (e.g. hi).")
+    input("     Press Enter once you have sent it: ")
+
+    cfg.save({"token": token, "chat_id": 0, "offset": 0})
+    try:
+        resp = telegram_poller._api(token, "getUpdates", {"offset": 0, "timeout": 0}, 10)
+    except Exception as e:
+        sys.exit(f"error: could not reach Telegram: {e}")
+    if not resp.get("ok"):
+        sys.exit("error: Telegram rejected the token")
+
+    chats = [
+        (u.get("message") or u.get("channel_post") or {}).get("chat", {}).get("id")
+        for u in resp.get("result", [])
+    ]
+    chats = [c for c in chats if c]
+    if not chats:
+        sys.exit("error: no message seen yet. Send your bot a message, then re-run this.")
+
+    chat_id = chats[-1]
+    offset = max(u["update_id"] for u in resp["result"]) + 1
+    cfg.save({
+        "token": token, "chat_id": chat_id, "offset": offset,
+        "aliases": existing.get("aliases") or {}, "status": None,
+    })
+    print(f"  linked to chat {chat_id}")
+
+    try:
+        import install_autostart
+
+        install_autostart.install_poller()
+        print("  background poller installed (every 15 minutes)")
+    except Exception as e:
+        print(f"  note: could not install the background poller automatically ({e}).")
+        print(f"  Run it manually any time with: python3 {Path(__file__).parent / 'telegram_poller.py'}")
+
+    print("\nDone. Send your bot a link; it will show up in the From Telegram column.")
+    print("Tip: prefix a message with #<board> (e.g. #workboard) to send it straight to that board.")
+    print("Set a short alias with: card.py telegram-alias qm /path/to/project/board")
+
+
+def cmd_telegram_alias(args):
+    """Add or remove a custom short alias for a board. Board-less (like
+    board-new): dispatched in main() before find_board() runs."""
+    import _tg_config as cfg
+
+    conf = cfg.load()
+    if not conf:
+        sys.exit("error: run `card.py telegram-setup` first")
+    aliases = dict(conf.get("aliases") or {})
+    if args.rm:
+        aliases.pop(args.alias, None)
+        print(f"removed alias #{args.alias}")
+    else:
+        if not args.board_dir:
+            sys.exit("error: give the board dir, e.g. card.py telegram-alias qm ~/Desktop/QM/board")
+        p = Path(args.board_dir).expanduser().resolve()
+        if not (p / "board.json").exists():
+            sys.exit(f"error: no board.json in {p}")
+        aliases[args.alias] = str(p)
+        print(f"#{args.alias} -> {p}")
+    conf["aliases"] = aliases
+    cfg.save(conf)

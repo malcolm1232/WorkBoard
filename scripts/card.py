@@ -384,6 +384,26 @@ def build_parser():
     pbn.add_argument("--port", type=int, default=None, help="preferred port (default: auto-assign)")
     pbn.set_defaults(fn=cmd_board_new)
 
+    # inbox / claim / telegram-setup / telegram-alias (#856 Task 5) — the CLI
+    # surface for the shared phone-capture inbox.
+    pib = sub.add_parser("inbox", help="list unclaimed Telegram captures")
+    pib.set_defaults(fn=cmd_inbox)
+
+    pcl = sub.add_parser("claim", help="promote a Telegram capture to a card on this board")
+    pcl.add_argument("tid", help="inbox item id, e.g. T-7")
+    pcl.add_argument("--column", help="target column (default: the board's task column)")
+    pcl.set_defaults(fn=cmd_claim)
+
+    pts = sub.add_parser("telegram-setup", help="connect a Telegram bot for phone capture")
+    pts.add_argument("--token", help="bot token (otherwise prompted)")
+    pts.set_defaults(fn=cmd_telegram_setup)
+
+    pta = sub.add_parser("telegram-alias", help="set a short #alias for a board")
+    pta.add_argument("alias")
+    pta.add_argument("board_dir", nargs="?")
+    pta.add_argument("--rm", action="store_true", help="remove the alias")
+    pta.set_defaults(fn=cmd_telegram_alias)
+
     return ap
 
 
@@ -400,7 +420,7 @@ _COUNTED_VERBS = ("add", "bug", "improve")
 # "the human is working on this board".
 _READ_ONLY_CMDS = frozenset({
     "show", "list", "digest", "query", "metrics", "export", "wiki",
-    "progress", "sweep-status", "prelaunch-check",
+    "progress", "sweep-status", "prelaunch-check", "inbox",
 })
 # Note: `recover` is NOT read-only — `recover --apply` restores a backup
 # (atomic_save), the strongest "I'm working on this board" signal there is, so
@@ -615,6 +635,10 @@ def main():
     # board-new creates a NEW board — there's no existing board to find/load/lock.
     if getattr(args, "cmd", None) == "board-new":
         return cmd_board_new(args)
+    # telegram-setup / telegram-alias operate on the Telegram config, not on
+    # any one board — same board-less shape as board-new.
+    if getattr(args, "cmd", None) in ("telegram-setup", "telegram-alias"):
+        return args.fn(args)
     if hoisted and not args.board:
         args.board = Path(hoisted)
     board = find_board(args.board)
