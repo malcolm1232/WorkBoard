@@ -389,8 +389,8 @@ def _tg_status_line() -> str:
     if not status:
         return ""
     return (
-        f"⚠ TELEGRAM CAPTURE BROKEN: {status} - captures have stopped arriving "
-        f"from every board. Re-run `card.py telegram-setup` to reconnect."
+        f"⚠ TELEGRAM CAPTURE BROKEN: {status}. Nothing sent from the phone is arriving. "
+        f"Re-run `card.py telegram-setup` to reconnect."
     )
 
 

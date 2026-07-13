@@ -123,7 +123,9 @@ def _poll_locked(api, timeout: float) -> list[dict]:
         resp = api(token, "getUpdates", {"offset": offset, "timeout": 0}, timeout)
     except urllib.error.HTTPError as e:
         if e.code in (401, 404):
-            cfg.set_status("Telegram token invalid or revoked - re-run `card.py telegram-setup`")
+            # A bare diagnosis: the remedy is worded once, by whoever surfaces this
+            # (see _inbox._tg_status_line). Do not append it here or the digest repeats it.
+            cfg.set_status("the bot token is invalid or revoked")
         return []
     except Exception:
         return []  # network down (incl. 429/500): offset untouched, the next tick retries
