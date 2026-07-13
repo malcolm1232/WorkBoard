@@ -113,6 +113,76 @@ def test_task_column():
           "falls back to a task-like name")
     check(cfg.task_column({"columns": [{"id": "notes"}, {"id": "done"}]}) == "notes",
           "falls back to the first column")
+    check(cfg.task_column({"columns": []}) == "task", "empty columns list does not raise")
+    check(cfg.task_column({}) == "task", "missing columns key does not raise")
+
+
+def test_blank_alias_never_guesses():
+    print("blank alias never resolves, even with exactly one board")
+    # The bug only shows up with exactly one resolvable alias: _slug(" ") is
+    # "", and "".startswith("") is True for every alias, so a whitespace
+    # token would match the user's one and only board.
+    write_assignments({"/Users/x/Desktop/WorkBoard/board": 7891})
+    cfg.save({"token": "T", "chat_id": 42, "offset": 0})
+    check(len(cfg.aliases()) == 1, "single-board fixture has exactly one alias")
+    check(cfg.resolve_board(" ") is None, "whitespace alias resolves to None")
+    check(cfg.resolve_board("") is None, "empty-string alias resolves to None")
+    check(cfg.resolve_board("\t") is None, "tab-only alias resolves to None")
+
+
+def test_patch_preserves_degraded_config():
+    print("_patch preserves fields it doesn't understand / can't validate")
+
+    # (a) full config with custom aliases: set_offset must not drop anything.
+    write_assignments({})
+    cfg.save({
+        "token": "T", "chat_id": 42, "offset": 0,
+        "aliases": {"qm": "/Users/x/Desktop/QuantifyMe/HFTAgents/board"},
+    })
+    cfg.set_offset(5)
+    conf = cfg.load()
+    check(conf is not None and conf["token"] == "T", "token survives set_offset")
+    check(conf is not None and conf["chat_id"] == 42, "chat_id survives set_offset")
+    check(conf is not None and conf.get("aliases", {}).get("qm") ==
+          "/Users/x/Desktop/QuantifyMe/HFTAgents/board", "custom aliases survive set_offset")
+    check(conf is not None and conf["offset"] == 5, "offset itself updated")
+
+    # (b) token but no chat_id: load() sees it as unusable, but set_status
+    # must still preserve the token rather than overwrite with just status.
+    cfg.config_path().write_text(json.dumps({"token": "T2"}))
+    check(cfg.load() is None, "token-without-chat_id is unusable per load()")
+    cfg.set_status("x")
+    raw = json.loads(cfg.config_path().read_text())
+    check(raw.get("token") == "T2", "token survives set_status on an incomplete config")
+    check(raw.get("status") == "x", "status still gets applied")
+
+    # (c) corrupt/truncated JSON: set_offset must not raise, and must not
+    # fabricate a config that claims to be usable.
+    cfg.config_path().write_text("{not valid json")
+    try:
+        cfg.set_offset(1)
+        raised = False
+    except Exception:
+        raised = True
+    check(not raised, "set_offset on corrupt JSON does not raise")
+    check(cfg.load() is None, "load() still refuses to call a patched-corrupt config usable")
+
+
+def test_board_dirs_degrades_on_broken_registry():
+    print("_board_dirs degrades to [] when the registry is broken")
+    import port_registry
+
+    def boom():
+        raise RuntimeError("registry exploded")
+
+    orig = port_registry.assignments
+    port_registry.assignments = boom
+    try:
+        check(cfg._board_dirs() == [], "broken registry yields no board dirs, not a crash")
+        check(cfg.aliases() == {} or isinstance(cfg.aliases(), dict),
+              "aliases() survives a broken registry too")
+    finally:
+        port_registry.assignments = orig
 
 
 if __name__ == "__main__":
@@ -121,5 +191,8 @@ if __name__ == "__main__":
     test_custom_alias_wins()
     test_ambiguous_alias_is_none()
     test_task_column()
+    test_blank_alias_never_guesses()
+    test_patch_preserves_degraded_config()
+    test_board_dirs_degrades_on_broken_registry()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

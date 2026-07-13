@@ -7,6 +7,7 @@ None: we do not guess which board an idea belongs to.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -23,15 +24,28 @@ def config_path() -> Path:
     return Path(env) if env else DEFAULT_PATH
 
 
-def load() -> dict | None:
+def _read_raw() -> dict:
+    """Whatever is on disk, without the usable-config gate. {} if missing/corrupt.
+
+    Callers that only need to PRESERVE existing fields (patching the offset,
+    reading custom aliases) must use this instead of load(): load() returns
+    None for a corrupt or partial config, and treating that None as "empty"
+    would silently discard the real token/chat_id/aliases already on disk.
+    """
     p = config_path()
     if not p.exists():
-        return None
+        return {}
     try:
         conf = json.loads(p.read_text())
     except Exception:
-        return None
-    if not conf.get("token") or not conf.get("chat_id"):
+        return {}
+    return conf if isinstance(conf, dict) else {}
+
+
+def load() -> dict | None:
+    """The usable config, or None if not configured / corrupt / incomplete."""
+    conf = _read_raw()
+    if not conf or not conf.get("token") or not conf.get("chat_id"):
         return None
     return conf
 
@@ -40,14 +54,22 @@ def save(conf: dict) -> None:
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(conf, indent=2, sort_keys=True))
-    os.chmod(tmp, 0o600)  # the token is a credential: never group/world readable
-    os.replace(tmp, p)
-    os.chmod(p, 0o600)
+    # Open with mode 0600 from the very first byte on disk: the token is a
+    # credential and must never be briefly world/group readable via the
+    # process umask (os.chmod after write_text is too late).
+    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(conf, indent=2, sort_keys=True))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    os.replace(tmp, p)  # mode travels with the rename; no second chmod needed
 
 
 def _patch(**fields) -> None:
-    conf = load() or {}
+    conf = _read_raw()
     conf.update(fields)
     save(conf)
 
@@ -84,17 +106,23 @@ def aliases() -> dict[str, str]:
         name = Path(d).parent.name  # ".../QuantifyMe/HFTAgents/board" -> "HFTAgents"
         derived.setdefault(_slug(name), []).append(d)
     out = {a: paths[0] for a, paths in derived.items() if len(paths) == 1}
-    conf = load() or {}
+    conf = _read_raw()
     for alias, d in (conf.get("aliases") or {}).items():
         out[_slug(alias)] = d
     return out
 
 
 def resolve_board(alias: str | None) -> Path | None:
-    """Exact match, then unique prefix. Ambiguous or unknown returns None."""
+    """Exact match, then unique prefix. Ambiguous, blank or unknown returns None."""
     if not alias:
         return None
     a = _slug(alias)
+    if not a:
+        # A whitespace-only (or otherwise all-punctuation) alias slugs down to
+        # "", and "".startswith("") is True for every alias in Python - that
+        # would make a blank token match a single-board user's only alias.
+        # Never guess: reject it here, after slugifying, not before.
+        return None
     al = aliases()
     if a in al:
         return Path(al[a])
