@@ -654,6 +654,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_divider()
         elif path == "/boards":
             self._handle_boards()
+        elif path == "/inbox":
+            self._handle_inbox()
         elif path == "/tags":
             self._send_tags_page()
         elif path.startswith("/archive/"):
@@ -862,6 +864,173 @@ class BoardHandler(BaseHTTPRequestHandler):
             "current_port": type(self).port,
         }).encode())
 
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            return json.loads(raw.decode() or "{}")
+        except Exception:
+            return {}
+
+    def _broadcast_inbox(self) -> None:
+        import _inbox
+
+        broadcast("inbox-updated", {"items": _inbox.unclaimed()})
+
+    def _handle_inbox(self):
+        """GET /inbox - the virtual "From Telegram" column. Pure read: must
+        never mutate board.json or the inbox (route-hint execution lives in
+        the poller, not here)."""
+        import _inbox
+        import _tg_config as tgcfg
+
+        payload = {"items": _inbox.unclaimed(), "configured": tgcfg.load() is not None}
+        self._send(200, json.dumps(payload).encode())
+
+    def _handle_inbox_claim(self):
+        """POST /inbox/claim - materialize an inbox capture as a real card on
+        THIS board.
+
+        Mirrors card_commands.cmd_claim's discipline (#856, three review
+        rounds): reserve the item (atomic CAS) BEFORE touching the board, so
+        two boards racing on the same item cannot both create a card; refuse
+        a same-board duplicate (a card whose meta.telegram.tid already equals
+        this tid); re-verify ownership of the reservation immediately before
+        the write (a stale-reservation takeover may have happened in
+        between); release on write failure; once the write has landed, never
+        release again - only finalize (best-effort - the card is already
+        durable even if finalize fails).
+
+        Tags are deliberately unvalidated here (`build_card` does not check
+        them against the taxonomy) - a phone capture must not be blocked by a
+        taxonomy the user never sees while texting.
+        """
+        import _inbox
+        import _tg_config as tgcfg
+        from card_state import build_card
+
+        body = self._read_body()
+        tid = body.get("tid")
+        if not tid or not _inbox.get(tid):
+            self._send(404, json.dumps({"ok": False, "error": "no such item"}).encode())
+            return
+
+        try:
+            item = _inbox.reserve(tid)
+        except _inbox.InboxConflict as e:
+            self._send(409, json.dumps(
+                {"ok": False, "conflict": True, "claim": e.claim}).encode())
+            return
+
+        token = item["reserveToken"]
+        bp = self.board_dir / "board.json"
+        global _cached_state
+        card = None
+        rev = None
+
+        with _write_lock:
+            d = json.loads(bp.read_text())
+
+            # Same-board duplicate guard: this tid may already be a card here
+            # (e.g. a prior claim whose finalize failed after the write had
+            # already landed, and the caller is retrying).
+            existing = next(
+                (c for c in d.get("cards", [])
+                 if ((c.get("meta") or {}).get("telegram") or {}).get("tid") == tid),
+                None,
+            )
+            if existing is not None:
+                try:
+                    _inbox.release(tid, token)  # best-effort; nothing written here
+                except Exception:
+                    pass
+                self._send(409, json.dumps({
+                    "ok": False, "conflict": True,
+                    "claim": {"board": str(self.board_dir), "cardNum": existing["num"]},
+                }).encode())
+                return
+
+            column = body.get("column") or tgcfg.task_column(d)
+            card = build_card(
+                d,
+                title=item["title"],
+                column=column,
+                tags=["from-telegram"],
+                origin=item["text"],
+                meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
+                                   "capturedAt": item.get("ts")}},
+            )
+            d["rev"] = int(d.get("rev", 0)) + 1
+            d["savedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            d["savedBy"] = "telegram"
+
+            # Pre-write ownership re-check: a stale-reservation takeover may
+            # have happened between reserve() above and here. Abort BEFORE
+            # writing if we no longer hold it - nothing has touched disk yet.
+            fresh = _inbox.get(tid)
+            if not (fresh and fresh.get("status") == "reserved"
+                    and fresh.get("reserveToken") == token):
+                self._send(409, json.dumps({
+                    "ok": False, "conflict": True,
+                    "claim": (fresh or {}).get("claim"),
+                }).encode())
+                return
+
+            out = json.dumps(d, indent=2).encode()
+            try:
+                atomic_write(bp, out)
+            except Exception as e:
+                try:
+                    _inbox.release(tid, token)  # never strand a reservation
+                except Exception:
+                    pass
+                self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
+                return
+            # The write landed durably: NEVER release the reservation again
+            # from here on, even if something below fails.
+            _boardio.write_backup(bp, out)
+            regen_index(self.board_dir)
+            with _cached_lock:
+                _cached_state = d
+            rev = d["rev"]
+
+        try:
+            _inbox.finalize(tid, board=str(self.board_dir), card_num=card["num"], token=token)
+        except Exception:
+            pass  # card is already durable; it may reappear in the inbox
+
+        broadcast("card-added", {"card": card})
+        broadcast("rev-bumped", {"rev": rev, "savedBy": "telegram",
+                                 "savedAt": d["savedAt"], "activeWork": d.get("activeWork")})
+        self._broadcast_inbox()
+        self._send(200, json.dumps({"ok": True, "card": card, "rev": rev}).encode())
+
+    def _handle_inbox_discard(self):
+        """POST /inbox/discard - drop an inbox item without ever creating a
+        card. No token required: discard is a moderation action."""
+        import _inbox
+
+        body = self._read_body()
+        tid = body.get("tid")
+        if not tid or not _inbox.get(tid):
+            self._send(404, json.dumps({"ok": False, "error": "no such item"}).encode())
+            return
+        try:
+            _inbox.discard(tid)
+        except _inbox.InboxConflict as e:
+            self._send(409, json.dumps(
+                {"ok": False, "conflict": True, "claim": e.claim}).encode())
+            return
+        self._broadcast_inbox()
+        self._send(200, json.dumps({"ok": True}).encode())
+
+    def _handle_inbox_notify(self):
+        """POST /inbox/notify - the poller or the CLI captured/claimed/
+        discarded something: push the current unclaimed set to open boards."""
+        self._read_body()  # drain, keep HTTP/1.1 keep-alive framing intact
+        self._broadcast_inbox()
+        self._send(200, json.dumps({"ok": True}).encode())
+
     def _handle_archive(self, path):
         """GET /archive/<rel> — serve an archived board snapshot (path-safe)."""
         rel = path[len("/archive/"):].lstrip("/")
@@ -958,6 +1127,15 @@ class BoardHandler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": f"bad progress: {e}"}).encode())
                 return
             self._send(200, b'{"ok":true}')
+            return
+        if path == "/inbox/claim":
+            self._handle_inbox_claim()
+            return
+        if path == "/inbox/discard":
+            self._handle_inbox_discard()
+            return
+        if path == "/inbox/notify":
+            self._handle_inbox_notify()
             return
         if path != "/board.json":
             self._send(404, b'{"error":"not found"}')
