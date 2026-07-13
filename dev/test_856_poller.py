@@ -372,6 +372,108 @@ def test_sendmessage_failure_leaves_capture_unconfirmed_for_retry():
     check(_inbox.get(item["tid"])["confirmed"] is True, "the item is now marked confirmed")
 
 
+def test_legacy_item_gets_no_confirmation_reply():
+    print("legacy item with no confirmed key gets no reply from a poll")
+    reset()
+    legacy = {
+        "tid": "T-1",
+        "update_id": 995,
+        "text": "legacy capture",
+        "title": "legacy capture",
+        "url": "",
+        "routeHint": None,
+        "ts": "2020-01-01T00:00:00Z",
+        "status": "unclaimed",
+        "claim": None,
+        "reserveToken": None,
+        # NOTE: no "confirmed" key - written before the field existed.
+    }
+    _inbox.path().parent.mkdir(parents=True, exist_ok=True)
+    with _inbox.path().open("a") as fh:
+        fh.write(json.dumps(legacy) + "\n")
+
+    sent = []
+    new = tp.poll(api=fake_api([], sent))
+    check(new == [], "no new capture this tick")
+    check(sent == [], f"no confirmation reply sent for the legacy item ({sent})")
+    check(_inbox.get(legacy["tid"])["status"] == "unclaimed", "the legacy item itself is untouched")
+
+
+def test_mark_confirmed_failure_does_not_crash_poll():
+    print("mark_confirmed raising: poll degrades instead of crashing, capture survives")
+    reset()
+    sent = []
+
+    def boom(tid):
+        raise OSError("disk full")
+
+    real_mark = _inbox.mark_confirmed
+    _inbox.mark_confirmed = boom
+    try:
+        new = tp.poll(api=fake_api([upd(96, "resilient-2")], sent))
+    finally:
+        _inbox.mark_confirmed = real_mark
+
+    check(len(new) == 1, "the capture still lands even though mark_confirmed failed")
+    check(len(sent) == 1, f"the confirmation reply was still sent ({sent})")
+    item = _inbox.get(new[0]["tid"])
+    check(item is not None, "the item survives in the inbox")
+    check(item.get("confirmed") is False,
+          "confirmed stays False on disk since the mark_confirmed write itself failed")
+
+
+def test_retry_after_claim_success_send_failure_keeps_card_number():
+    print("retry: claim succeeded but the reply failed to send - retry must not lose the card number")
+    reset()
+    claim_calls = []
+
+    def fake_claim(item):
+        claim_calls.append(item["tid"])
+        current = _inbox.get(item["tid"])
+        if current and current.get("status") != "claimed":
+            reserved = _inbox.reserve(item["tid"])
+            _inbox.finalize(item["tid"], board="/tmp/qm-board", card_num=555,
+                             token=reserved["reserveToken"])
+        return "saved -> qm #555"
+
+    real_claim_hint = tp._claim_hint
+    tp._claim_hint = fake_claim
+
+    def flaky_sendmessage_api(token, method, params, timeout):
+        if method == "getUpdates":
+            return {"ok": True, "result": [upd(97, "#qm needs routing")]}
+        if method == "sendMessage":
+            raise urllib.error.URLError("down")
+        raise AssertionError(method)
+
+    try:
+        new = tp.poll(api=flaky_sendmessage_api)
+    finally:
+        tp._claim_hint = real_claim_hint
+
+    check(len(new) == 1, "the capture lands")
+    item = _inbox.get(new[0]["tid"])
+    check(item["status"] == "claimed", "the item got claimed even though the reply failed")
+    check(item["confirmed"] is False, "still unconfirmed since the reply never sent")
+    check(claim_calls == [item["tid"]], "the claim path ran exactly once, on the failed-reply tick")
+
+    # Retry tick: sendMessage now works. _claim_hint must NOT be invoked
+    # again for this already-claimed item - the reply must be rebuilt from
+    # the claim already recorded on the item, not re-derived by re-running
+    # the claim (which card.py would now refuse and degrade to bare "saved").
+    tp._claim_hint = fake_claim
+    sent = []
+    try:
+        new2 = tp.poll(api=fake_api([upd(97, "#qm needs routing")], sent))
+    finally:
+        tp._claim_hint = real_claim_hint
+
+    check(new2 == [], "no duplicate capture on retry (update_id dedupe)")
+    check(claim_calls == [item["tid"]], "_claim_hint was not called again on the retry")
+    check(sent == ["saved -> qm #555"], f"retry reply rebuilt from the recorded claim ({sent})")
+    check(_inbox.get(item["tid"])["confirmed"] is True, "the item is now confirmed")
+
+
 if __name__ == "__main__":
     test_captures_and_confirms()
     test_ignores_other_chats()
@@ -388,5 +490,8 @@ if __name__ == "__main__":
     test_second_concurrent_poller_noops()
     test_http_429_and_500_are_silent()
     test_sendmessage_failure_leaves_capture_unconfirmed_for_retry()
+    test_legacy_item_gets_no_confirmation_reply()
+    test_mark_confirmed_failure_does_not_crash_poll()
+    test_retry_after_claim_success_send_failure_keeps_card_number()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)

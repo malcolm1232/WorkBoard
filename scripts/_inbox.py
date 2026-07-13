@@ -191,8 +191,18 @@ def unconfirmed() -> list[dict]:
     marked confirmed - so a capture can never be silently lost from the
     user's point of view, and never confirmed twice either since the
     poller calls `mark_confirmed` only after the reply actually lands.
+
+    A missing `confirmed` key (an item written before the field existed)
+    defaults to True, not False: we cannot know it was never confirmed, and
+    the safe assumption is that it was, since the alternative is a spurious
+    "saved" reply for a message the user already acted on. `append()`
+    always stamps `confirmed: False` explicitly, so a genuinely new capture
+    is unaffected and still gets exactly one reply. This payload still
+    carries `status`, `claim` and `routeHint` (only `reserveToken` is
+    stripped) so the poller can rebuild a claimed item's reply without
+    re-running the claim.
     """
-    return [_for_browser(i) for i in _read() if not i.get("confirmed", False)]
+    return [_for_browser(i) for i in _read() if not i.get("confirmed", True)]
 
 
 def mark_confirmed(tid: str) -> dict:

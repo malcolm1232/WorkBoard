@@ -173,12 +173,32 @@ def _poll_locked(api, timeout: float) -> list[dict]:
     # reply actually sends, so a sendMessage failure leaves the capture
     # intact and simply retries next tick - never lost, never duplicated.
     for item in _inbox.unconfirmed():
-        reply = _claim_hint(item) or "saved"
+        # If a previous tick already claimed this item (via _claim_hint)
+        # but the reply that followed failed to send, don't call
+        # _claim_hint again: the item is already claimed, so card.py claim
+        # would now refuse it (the inbox reservation gate), degrading the
+        # retry's reply to a bare "saved" and losing the card number.
+        # Rebuild the same reply from the claim already recorded on the
+        # item instead.
+        if item.get("status") == "claimed" and item.get("claim"):
+            alias = item.get("routeHint")
+            card_num = item["claim"].get("cardNum")
+            reply = f"saved -> {alias} #{card_num}" if alias and card_num is not None else "saved"
+        else:
+            reply = _claim_hint(item) or "saved"
         try:
             api(token, "sendMessage", {"chat_id": chat_id, "text": reply}, timeout)
         except Exception:
             continue  # the capture landed; a failed confirmation must not lose it
-        _inbox.mark_confirmed(item["tid"])
+        try:
+            _inbox.mark_confirmed(item["tid"])
+        except Exception:
+            # The reply was already delivered to the phone. If recording
+            # that fails (disk full, permission error, an I/O hiccup in the
+            # flock/tmp-rename), this must degrade like a send failure -
+            # retry next tick - not crash the unattended run and leave the
+            # reply undelivered-on-record, which would fire a duplicate.
+            continue
 
     if new:
         _inbox.notify_boards()

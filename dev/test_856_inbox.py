@@ -353,6 +353,40 @@ def test_confirmation_tracking():
           "unconfirmed() strips reserveToken before it reaches a browser, like unclaimed() does")
 
 
+def test_legacy_item_without_confirmed_key_treated_as_confirmed():
+    print("legacy item with no confirmed key is treated as already confirmed")
+    reset()
+    _inbox.path().parent.mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "tid": "T-1",
+        "update_id": 1200,
+        "text": "legacy capture",
+        "title": "legacy capture",
+        "url": "",
+        "routeHint": None,
+        "ts": "2020-01-01T00:00:00Z",
+        "status": "unclaimed",
+        "claim": None,
+        "reserveToken": None,
+        # NOTE: no "confirmed" key at all - simulates an item written to
+        # disk before the field existed.
+    }
+    with _inbox.path().open("a") as fh:
+        fh.write(json.dumps(legacy) + "\n")
+
+    check(legacy["tid"] not in [i["tid"] for i in _inbox.unconfirmed()],
+          "a legacy item with no confirmed key does not appear in unconfirmed()")
+    check(legacy["tid"] in [i["tid"] for i in _inbox.unclaimed()],
+          "the legacy item is otherwise a completely normal unclaimed item")
+
+    # A brand-new capture must be unaffected: append() always stamps
+    # confirmed=False explicitly, so it still gets exactly one reply cycle.
+    fresh = _inbox.append("fresh capture", update_id=1201)
+    check(fresh["confirmed"] is False, "a freshly appended item still starts unconfirmed")
+    check([i["tid"] for i in _inbox.unconfirmed()] == [fresh["tid"]],
+          "only the fresh item shows up in unconfirmed(), not the legacy one")
+
+
 def test_notify_boards_never_raises():
     print("notify_boards never raises when nothing is listening")
     reset()
@@ -386,6 +420,7 @@ if __name__ == "__main__":
     test_duplicate_claim_regression()
     test_stale_takeover_cannot_produce_two_claims()
     test_confirmation_tracking()
+    test_legacy_item_without_confirmed_key_treated_as_confirmed()
     test_notify_boards_never_raises()
     print("PASS" if _fails == 0 else f"FAIL ({_fails})")
     sys.exit(1 if _fails else 0)
