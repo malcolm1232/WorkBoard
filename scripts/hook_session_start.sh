@@ -305,6 +305,9 @@ fi
 # stale sseClients proxy that wrongly counted a backgrounded/closed connection as
 # "open". Delegated to board_autoopen.sh (Chrome-tab check → sseClients fallback
 # → opens in Chrome; honours BOARD_NO_AUTO_OPEN).
+# #907 — and at most ONCE PER DAY per board: this is the passive path, so if the
+# user closed the tab we do not pop it back on the next session (board_autoopen's
+# day stamp). Explicit paths (bootstrap, board-new) set BOARD_OPEN_EXPLICIT=1.
 if [ -n "${server_health}" ]; then
   # #836 — pass THIS session's id so the opened tab carries ?sid (top-pin). The
   # id was parsed from stdin above; board_autoopen reads it from $3 (or the env
