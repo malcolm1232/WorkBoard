@@ -106,6 +106,8 @@ fi
 # Open the board — REQUIRED for the Haiku fly-in (it's gated on a live viewer).
 # Open iff it isn't already visible in Chrome (#73), mirroring the hook — same
 # board_autoopen.sh (Chrome-tab check → sseClients fallback → opens in Chrome).
-"$(dirname "$0")/board_autoopen.sh" "${want_port}" "${proj_root}" >/dev/null 2>&1 || true
+# BOARD_OPEN_EXPLICIT=1: a bootstrap is a request for this board, so it skips the
+# hook's once-per-day gate (a recycled port may already carry today's stamp).
+BOARD_OPEN_EXPLICIT=1 "$(dirname "$0")/board_autoopen.sh" "${want_port}" "${proj_root}" >/dev/null 2>&1 || true
 
 echo "${want_port}"

@@ -11,6 +11,9 @@
 # (non-macOS, no osascript, or Automation permission denied) so non-Mac/remote
 # users keep working. Honours BOARD_NO_AUTO_OPEN=1 (headless/CI/cron).
 #
+# Passive callers (the SessionStart hook) open at most ONCE PER DAY per board;
+# explicit callers set BOARD_OPEN_EXPLICIT=1 to skip that gate (see below).
+#
 # Usage: board_autoopen.sh <port> [project_dir] [session_id]
 set -u
 port="${1:?need port}"
@@ -56,6 +59,19 @@ mkdir -p "${state_dir}" 2>/dev/null || true
 stamp="${state_dir}/.opened-${port}"
 lock="${state_dir}/.opening-${port}.lock"
 cooldown=12
+
+# Once per day (passive opens only). The stamp's CONTENT is the day we last
+# opened this board. The old policy — "open whenever no tab shows the board" —
+# meant closing the tab (or quitting Chrome) got it re-opened by the very next
+# Claude session: a new tab per terminal, all day. Closing the tab is a decision;
+# respect it until tomorrow. An explicit request (BOARD_OPEN_EXPLICIT=1 — set by
+# bootstrap_project.sh and card.py board-new, where the user ASKED for a board)
+# skips this gate but still goes through the cooldown + tab-presence dedupe.
+# A legacy empty stamp reads as "not today" → one open, which rewrites it.
+today="$(date +%Y%m%d 2>/dev/null || echo 0)"
+if [ "${BOARD_OPEN_EXPLICIT:-0}" != "1" ] && [ -f "${stamp}" ]; then
+  [ "$(head -n 1 "${stamp}" 2>/dev/null | tr -d '[:space:]')" = "${today}" ] && exit 0
+fi
 
 # Cooldown: we opened (or tried) very recently → don't open again.
 if [ -f "${stamp}" ]; then
@@ -138,8 +154,9 @@ esac
 
 # Arm the cooldown (#122): stamp NOW, before the async `open`, so any invocation
 # in the next ${cooldown}s — while this tab is still rendering and not yet
-# visible to the Chrome/SSE check — sees a fresh stamp and skips.
-touch "${stamp}" 2>/dev/null || true
+# visible to the Chrome/SSE check — sees a fresh stamp and skips. The content
+# (today's date) is what the once-per-day gate above reads.
+echo "${today}" > "${stamp}" 2>/dev/null || true
 
 # Sweep stale #367 open-stamps for this project, then open (prefer Chrome).
 [ -n "$project_dir" ] && rm -f "${project_dir}"/board/.opened-* 2>/dev/null

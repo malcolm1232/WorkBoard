@@ -559,7 +559,9 @@ def cmd_board_new(args):
             # carries ?sid even if the env var isn't propagated; board_autoopen
             # falls back to CLAUDE_CODE_SESSION_ID when it's empty.
             sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+            # board-new is an explicit request → skip the hook's once-per-day gate.
             subprocess.Popen(["bash", str(ao), str(port), str(proj), sid],
+                             env={**os.environ, "BOARD_OPEN_EXPLICIT": "1"},
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
         except Exception:
