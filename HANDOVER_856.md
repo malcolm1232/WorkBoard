@@ -1,5 +1,12 @@
 # Handover: #856 Telegram phone capture (session of 2026-07-13)
 
+## STATUS UPDATE 2026-09-19: shipped in v0.9.42
+
+The user chose to ship the whole branch.
+Verified before the merge: every `dev/test_*.py` suite green in a CLEAN CLONE, plus a real-browser pass on two isolated boards served from that clone (drag-to-claim, cross-board live removal, CLI claim + double-claim refusal, project switcher, refresh stickiness, zero console errors).
+NOT verified: steps 1-3 and 5 of the real-phone gate below (a real BotFather token, a real Telegram message, the `saved` reply). No bot was configured on the machine, so an agent could not run them.
+Everything below this section is the original handover, kept for the invariants and the code map; its "NOT merged and NOT shipped" wording is historical.
+
 ## TL;DR for the next session
 
 The feature is **built, reviewed, and green, but NOT merged and NOT shipped**.
