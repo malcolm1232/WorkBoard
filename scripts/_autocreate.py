@@ -313,82 +313,27 @@ def decide(cwd, env: dict | None = None, payload: dict | None = None,
 
 # ── is any WorkBoard tab open? ──────────────────────────────────────────────
 
-def _known_ports() -> set[int]:
-    ports: set[int] = set()
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import port_registry as pr
-        for v in pr.assignments().values():
-            try:
-                ports.add(int(v))
-            except (TypeError, ValueError):
-                pass
-        for v in pr.read().values():
-            if isinstance(v, dict) and v.get("port"):
-                ports.add(int(v["port"]))
-    except Exception:
-        pass
-    return ports
-
-
-_AS_TABS = '''
-tell application "System Events"
-  if not (exists process "Google Chrome") then return ""
-end tell
-set out to ""
-tell application "Google Chrome"
-  repeat with w in windows
-    repeat with t in tabs of w
-      set out to out & (URL of t) & linefeed
-    end repeat
-  end repeat
-end tell
-return out
-'''
-
-
 def any_board_tab(exclude: int | None = None) -> bool:
     """True if a browser tab already shows ANY WorkBoard (any board, any port).
 
-    Chrome is asked directly (AppleScript, same approach as board_autoopen.sh)
-    when it is running; otherwise / when that fails, a live board server with a
-    connected or recently connected viewer counts as an open tab."""
-    import re
-    ports = _known_ports()
-    if exclude is not None:
-        ports.discard(exclude)
-    if not ports:
-        return False
-    chrome_known = False
+    Uses the #959 auto-open gate's own read-only Chrome probe (_autoopen.py),
+    so "is a board tab open" means the same thing everywhere. When Chrome's
+    state cannot be read (no AppleScript, denied, timed out), a live board with
+    a connected or recently connected viewer counts as an open tab."""
     try:
-        if subprocess.run(["pgrep", "-x", "Google Chrome"],
-                          capture_output=True, timeout=2).returncode == 0:
-            r = subprocess.run(["osascript", "-"], input=_AS_TABS,
-                               capture_output=True, text=True, timeout=4)
-            if r.returncode == 0:
-                chrome_known = True
-                for url in r.stdout.splitlines():
-                    m = re.match(r"https?://(?:127\.0\.0\.1|localhost):(\d+)", url.strip())
-                    if m and int(m.group(1)) in ports:
-                        return True
-        else:
-            chrome_known = True     # Chrome not running: no Chrome tab
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _autoopen as ao
     except Exception:
-        chrome_known = False
-    if chrome_known:
         return False
-    import urllib.request
-    for p in ports:
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{p}/health", timeout=0.5) as r:
-                d = json.loads(r.read())
-            n = int(d.get("sseClients", 0) or 0)
-            now, last = int(d.get("nowMs", 0) or 0), int(d.get("lastSseConnectMs", 0) or 0)
-            if n > 0 or (now and last and now - last < 20000):
-                return True
-        except Exception:
-            continue
-    return False
+    known = ao._board_ports()
+    ch = ao.probe_chrome(known)
+    tabs = [t for t in ch.get("board_tabs", []) if exclude is None or t[0] != exclude]
+    if tabs:
+        return True
+    if ch.get("state") != "unknown":
+        return False
+    return any(ao._viewer_recent(ao._health(p, 0.6))
+               for p in sorted(known) if p != exclude)
 
 
 # ── hook text ────────────────────────────────────────────────────────────────

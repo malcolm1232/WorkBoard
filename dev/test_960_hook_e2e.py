@@ -85,16 +85,14 @@ class Sandbox:
         self.tabs = self.base / "chrome_tabs.txt"     # one URL per line
         self.tabs.write_text("")
         self._shim("open", f'echo "$@" >> "{self.open_log}"\n')
-        # Fake Chrome. _autocreate.any_board_tab asks for every tab URL;
-        # board_autoopen.sh asks "does a tab contain 127.0.0.1:<port>".
-        self._shim("osascript", f'''in="$(cat)"
-case "$in" in
-  *"set out to"*) cat "{self.tabs}" ;;
-  *) p="$(printf '%s' "$in" | grep -o '127.0.0.1:[0-9]*' | head -n 1)"
-     if [ -n "$p" ] && grep -q "$p" "{self.tabs}"; then echo yes; else echo no; fi ;;
-esac
+        # Fake Chrome, answering the #959 probe protocol (pid / windows / one
+        # loopback URL per line) that both _autocreate.any_board_tab and the
+        # auto-open gate use. Its open tabs are the lines of self.tabs.
+        self._shim("osascript", f'''cat >/dev/null
+printf 'pid:4242\\nwindows:1\\n'
+cat "{self.tabs}"
 ''')
-        self._shim("pgrep", "exit 0\n")
+        self._shim("pgrep", "echo 4242\n")
         self._shim("launchctl", f'echo "$@" >> "{self.base}/launchctl.log"\n')
         self._shim("claude", "exit 1\n")
         # Seed the port map so our boards bind above any real board server.

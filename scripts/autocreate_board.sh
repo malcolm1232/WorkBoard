@@ -54,5 +54,6 @@ if python3 "${hook_dir}/_autocreate.py" any-tab --exclude "${port}"; then
   exit 0
 fi
 
-BOARD_OPEN_EXPLICIT=1 "${hook_dir}/board_autoopen.sh" "${port}" "${root}" "${sid}" >/dev/null 2>&1 || true
+BOARD_OPEN_EXPLICIT=1 BOARD_OPEN_CALLER="autocreate" \
+  "${hook_dir}/board_autoopen.sh" "${port}" "${root}" "${sid}" >/dev/null 2>&1 || true
 exit 0
