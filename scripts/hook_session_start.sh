@@ -38,7 +38,7 @@ hook_source="${hook_meta#* }"
 # a new project get one?" (_autocreate.py: project root = git top-level or cwd,
 # worktrees map to their main repo, existing board at/above wins, deny-list,
 # person-vs-headless session, ~/.board-steward/config.json). Prints
-# action<TAB>root<TAB>board<TAB>reason; action is use|create|ask|skip.
+# action<TAB>root<TAB>reason<TAB>board; action is use|create|ask|skip.
 # The payload's cwd is the session's cwd; PWD is the same for a normal start.
 sess_cwd="$(printf '%s' "${hook_stdin}" | python3 -c '
 import sys, json
@@ -51,7 +51,7 @@ except Exception:
 ac_action=""; ac_root=""; ac_board=""; ac_reason=""
 ac_line="$(BOARD_HOOK_PAYLOAD="${hook_stdin}" python3 "$(dirname "$0")/_autocreate.py" decide "${sess_cwd}" 2>/dev/null)"
 if [ -n "${ac_line}" ]; then
-  IFS=$'\t' read -r ac_action ac_root ac_board ac_reason <<<"${ac_line}"
+  IFS=$'\t' read -r ac_action ac_root ac_reason ac_board <<<"${ac_line}"
 fi
 
 board_path=""

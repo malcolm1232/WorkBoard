@@ -187,6 +187,17 @@ def main():
         sb = Sandbox(Path(td))
         H = sb.home
         try:
+            print("0. fresh user (no board yet) outside a project, and headless")
+            out, _ = sb.hook(H / "Desktop", sid="sess-0a")
+            check("outside a project folder" in out and not (H / "Desktop" / "board").exists(),
+                  "~/Desktop itself: first-board picker / hint, no board")
+            hp = H / "Desktop" / "headless-first"
+            out, _ = sb.hook(hp, attended=False, sid="sess-0b")
+            time.sleep(1.5)
+            check(out.strip() == "" and not (hp / "board").exists(),
+                  "claude -p in a new folder before any board: silent, no board, no picker")
+            check(not (H / ".board-steward" / ".onboarded").exists(), "still not onboarded")
+
             print("A. first new project of a fresh user, no browser tab open")
             a = H / "Desktop" / "my-idea"
             out, dt = sb.hook(a)

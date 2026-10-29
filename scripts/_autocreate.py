@@ -443,7 +443,10 @@ def _cli(argv: list[str]) -> int:
             payload = {}
         d = decide(cwd, payload=payload)
         # Tab-separated so the shell can `read` it without a JSON parser.
-        print("\t".join([d["action"], d["root"], d["board"], d["reason"]]))
+        # The only field that can be empty (board) goes LAST: bash `read` with
+        # IFS=tab collapses consecutive tabs, so an empty middle field would
+        # shift every later one.
+        print("\t".join([d["action"], d["root"], d["reason"], d["board"]]))
         return 0
     if cmd == "any-tab":
         ex = None
