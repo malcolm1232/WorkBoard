@@ -1121,6 +1121,23 @@ class BoardHandler(BaseHTTPRequestHandler):
         self._broadcast_inbox()
         self._send(200, json.dumps({"ok": True}).encode())
 
+    def _handle_boards_notify(self):
+        """POST /boards/notify {path, port, title} - #960: another board was
+        just created. Re-broadcast it as a `boards-changed` SSE event so an open
+        tab refreshes its project switcher and shows a "New board" notice
+        without a reload. Fields are clamped; nothing is stored."""
+        body = self._read_body()
+        evt = {"path": "", "port": 0, "title": ""}
+        if isinstance(body, dict):
+            evt["path"] = str(body.get("path") or "")[:1024]
+            evt["title"] = str(body.get("title") or "")[:200]
+            try:
+                evt["port"] = int(body.get("port") or 0)
+            except (TypeError, ValueError):
+                evt["port"] = 0
+        broadcast("boards-changed", evt)
+        self._send(200, json.dumps({"ok": True}).encode())
+
     def _handle_archive(self, path):
         """GET /archive/<rel> — serve an archived board snapshot (path-safe)."""
         rel = path[len("/archive/"):].lstrip("/")
@@ -1226,6 +1243,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             return
         if path == "/inbox/notify":
             self._handle_inbox_notify()
+            return
+        if path == "/boards/notify":
+            self._handle_boards_notify()
             return
         if path != "/board.json":
             self._send(404, b'{"error":"not found"}')
@@ -1445,6 +1465,36 @@ def _kick_token_scan():
     threading.Thread(target=_token_scan_once, daemon=True).start()
 
 
+def _announce_new_board(board_dir, port: int, delay: float = 0.4) -> None:
+    """#960 - tell every OTHER live board server that this board was just
+    created (POST /boards/notify), so a tab already showing any WorkBoard adds
+    it to the project switcher with a notice instead of a new tab opening.
+    Runs on a daemon thread once our socket is bound (so the switcher's
+    /boards probe already sees us running). Best-effort, never raises."""
+    time.sleep(delay)
+    try:
+        import port_registry as _pr
+        live = _pr.read()
+    except Exception:
+        return
+    body = json.dumps({"path": str(Path(board_dir).resolve()), "port": int(port),
+                       "title": _board_title_for(board_dir) or ""}).encode()
+    token = os.environ.get("BOARD_AUTH_TOKEN")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    for entry in list(live.values()):
+        other = entry.get("port") if isinstance(entry, dict) else None
+        if not other or int(other) == int(port):
+            continue
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{int(other)}/boards/notify",
+                                         data=body, headers=headers, method="POST")
+            urllib.request.urlopen(req, timeout=1).read()
+        except Exception:
+            continue   # down or busy: it sees the board on its next /boards fetch
+
+
 def _start_token_scanner():
     if os.environ.get("BOARD_TOKENS_DISABLE") == "1":
         return
@@ -1525,6 +1575,7 @@ def _resolve_board_dir(args):
                     title_override=args.title,
                     share=args.share)
     print(f"bootstrapped new board at {board_dir} (profile={args.profile})", file=sys.stderr)
+    args._fresh_board = True   # #960 - announce it to open tabs once we're bound
     # Lock in this board's designated port BEFORE the fill-stream starts, so a
     # fresh 2nd board (whose caller passed the same 7891) streams its cards to
     # its OWN server, not whoever already owns 7891 (#374).
@@ -1688,6 +1739,9 @@ def _run_server(board_dir, args):
         print(f"warn: port-registry write failed: {e}", file=sys.stderr)
     print(f"📋 board-steward v4 serving {board_dir} at {url} (SSE on /events)", flush=True)
     _start_token_scanner()
+    if getattr(args, "_fresh_board", False):
+        threading.Thread(target=_announce_new_board, args=(board_dir, args.port),
+                         daemon=True).start()
     if BoardHandler.auth_token:
         _print_lan_url(args)
     try:

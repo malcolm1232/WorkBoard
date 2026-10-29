@@ -1721,6 +1721,31 @@
   }
   .toast.show { opacity: 1; }
 
+  /* #960 - "New board: <name>" notice: a board was auto-created in another
+     project while this tab is open. Same dark pill as .toast, but clickable
+     (Open switches to it in place) and it stays a little longer. */
+  .newboard-notice {
+    position: fixed; bottom: 16px; left: 50%; transform: translate(-50%, 6px);
+    display: flex; align-items: center; gap: 12px; max-width: min(460px, calc(100vw - 32px));
+    background: var(--ink); color: #fff; padding: 7px 8px 7px 14px; border-radius: 8px;
+    font-size: 13px; line-height: 1.3; box-shadow: 0 4px 16px rgba(0,0,0,.3);
+    opacity: 0; pointer-events: none; z-index: 310;
+    transition: opacity .2s, transform .25s cubic-bezier(0.34, 1.45, 0.64, 1);
+  }
+  .newboard-notice.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .newboard-notice .nb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .newboard-notice .nb-text b { font-weight: 600; }
+  .newboard-notice button {
+    flex: 0 0 auto; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    border: 0; border-radius: 6px; padding: 4px 10px; background: var(--accent); color: #fff;
+  }
+  .newboard-notice button.nb-close {
+    background: transparent; color: rgba(255,255,255,.7); padding: 4px 6px; font-weight: 500;
+  }
+  .newboard-notice button.nb-close:hover { color: #fff; }
+  /* The new board's tab gets a soft accent ring for a few seconds. */
+  .project-tabs .proj-tab.is-new { box-shadow: 0 0 0 1.5px var(--accent) inset; color: var(--ink); }
+
   /* Auto-card undo toast (#100) — fixed at top-center; richer than plain toast.
      Shimmer-pulse accent ring while live; sweep-out timer bar at the bottom. */
   .undo-toast {
@@ -2126,6 +2151,11 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="newboard-notice" id="newboard-notice" role="status" aria-live="polite">
+  <span class="nb-text"></span>
+  <button type="button" class="nb-open">Open</button>
+  <button type="button" class="nb-close" aria-label="Dismiss">Dismiss</button>
+</div>
 <div class="undo-toast" id="undo-toast"></div>
 <div id="col-trash" title="Drop a card here to discard · drop a column to delete it">🗑</div>
 <div id="mini-confirm-overlay">
@@ -5552,6 +5582,47 @@ async function switchProject(btn, b) {
     btn.classList.remove('starting');
     btn.textContent = prev;
   }
+}
+
+// #960 - a `boards-changed` SSE event: a board was just created for another
+// project. Re-fetch the switcher (no reload) and, unless it's the board already
+// on screen, show "New board: <name>" with an Open button that swaps to it in
+// place, and ring its tab for a few seconds.
+async function handleBoardsChanged(d) {
+  await loadProjectTabs();
+  if (!d || !d.path || Number(d.port) === activePort) return;
+  const findTab = () => Array.from(document.querySelectorAll('#project-tabs .proj-tab'))
+    .find(t => t._board && t._board.path === d.path);
+  const tab = findTab();
+  if (tab) {
+    tab.classList.add('is-new');
+    setTimeout(() => { const t = findTab(); if (t) t.classList.remove('is-new'); }, 8000);
+  }
+  const base = d.path.replace(/\/board\/?$/, '').split('/').filter(Boolean).pop() || '';
+  const name = cleanProjectTitle(d.title) || base || ('Board ' + d.port);
+  showNewBoardNotice(name, () => {
+    const t = findTab();
+    const b = (t && t._board) || { path: d.path, port: Number(d.port) };
+    switchProject(t || document.createElement('button'), b);
+  });
+}
+
+function showNewBoardNotice(name, onOpen, ms = 9000) {
+  const n = document.getElementById('newboard-notice');
+  if (!n) return;
+  const txt = n.querySelector('.nb-text');
+  txt.textContent = '';
+  const lead = document.createTextNode('New board: ');
+  const b = document.createElement('b');
+  b.textContent = name;
+  txt.append(lead, b);
+  txt.title = 'New board: ' + name;
+  const hide = () => { n.classList.remove('show'); clearTimeout(showNewBoardNotice._t); };
+  n.querySelector('.nb-open').onclick = () => { hide(); onOpen(); };
+  n.querySelector('.nb-close').onclick = hide;
+  n.classList.add('show');
+  clearTimeout(showNewBoardNotice._t);
+  showNewBoardNotice._t = setTimeout(hide, ms);
 }
 
 // #846 — swap the on-screen board to `port` WITHOUT navigating: repoint board-data
@@ -9156,6 +9227,13 @@ function startSSE() {
       if (isDragInProgress()) { _pendingResync = true; return; }
       renderInboxColumn();
     } catch (_) { /* ignore */ }
+  });
+  // #960 - another project just got a board (auto-created or board-new):
+  // refresh the switcher in place and show a small "New board" notice.
+  _es.addEventListener('boards-changed', e => {
+    let d = {};
+    try { d = JSON.parse(e.data) || {}; } catch (_) {}
+    handleBoardsChanged(d);
   });
   _es.addEventListener('extract_progress', e => {        // #318 BOARD-LOAD HUD
     try {
