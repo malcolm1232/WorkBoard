@@ -1870,7 +1870,7 @@
   }
   .tk-tile .tk-k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
   .tk-tile .tk-v { font-size: 24px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-  .tk-tile .tk-s { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tk-tile .tk-s { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
   .tk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .tk-card {
     background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px;
@@ -1879,13 +1879,27 @@
   .tk-card.wide { grid-column: 1 / -1; }
   .tk-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
   .tk-card h3 .tk-note { font-weight: 400; color: var(--muted); font-size: 12px; }
-  .tk-bars { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding-top: 4px; }
-  .tk-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: default; }
+  /* Daily chart: value axis (0 / half / top gridline, labelled) on the left,
+     bars on a shared baseline, a few date ticks below. Every bar has its date
+     and value on hover, on tap (touch) and in its aria-label. */
+  .tk-chart { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; }
+  .tk-yaxis { position: relative; height: 128px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tk-yaxis span { display: block; position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+  .tk-yaxis .tk-ywidth { position: static; visibility: hidden; transform: none; height: 0; }
+  .tk-plot { position: relative; height: 128px; }
+  .tk-grid-line { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid rgba(44,38,32,.08); }
+  .tk-grid-line.base { border-top-color: rgba(44,38,32,.22); }
+  .tk-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; }
+  .tk-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
+  .tk-bar.on > i { filter: brightness(1.15); }
   .tk-bar > i {
     display: block; width: 100%; background: var(--tk-1); border-radius: 4px 4px 0 0; min-height: 1px;
   }
   .tk-bar:hover > i { filter: brightness(1.12); }
-  .tk-bar-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .tk-xaxis { grid-column: 2; position: relative; height: 16px; margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tk-xaxis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+  .tk-xaxis span.first { transform: none; }
+  .tk-xaxis span.last { transform: translateX(-100%); }
   .tk-stack { display: flex; height: 14px; gap: 2px; border-radius: 4px; overflow: hidden; margin: 2px 0 12px; }
   .tk-stack > i { display: block; min-width: 0; }
   .tk-legend { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px 12px; font-size: 12px; align-items: center; }
@@ -1930,7 +1944,7 @@
     .tk-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
   @media (max-width: 860px) {
-    #tokens { padding: 14px 16px 28px; }
+    #tokens { padding: 14px 16px 64px; }   /* clear of the docked Logs bar */
     .tk-grid { grid-template-columns: minmax(0, 1fr); }
     .tk-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .tk-controls { margin-left: 0; width: 100%; }
@@ -2305,8 +2319,10 @@ function _logsHud() {
 
   // Draggable header (mirrors drag-hud pattern).
   let drag = null;
-  head.addEventListener('mousedown', e => {
-    if (e.target.id === 'logs-min-btn') return;
+  // Pointer events (not mouse-only) so the HUD can be dragged on touch screens.
+  head.style.touchAction = 'none';
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('#logs-min-btn')) return;
     e.preventDefault();
     const r = hud.getBoundingClientRect();
     drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
@@ -2315,14 +2331,14 @@ function _logsHud() {
     hud.style.top  = r.top  + 'px';
     hud.style.right = ''; hud.style.bottom = '';
   });
-  document.addEventListener('mousemove', e => {
+  document.addEventListener('pointermove', e => {
     if (!drag) return;
     const nx = Math.max(0, Math.min(window.innerWidth  - 60, e.clientX - drag.dx));
     const ny = Math.max(0, Math.min(window.innerHeight - 24, e.clientY - drag.dy));
     hud.style.left = nx + 'px';
     hud.style.top  = ny + 'px';
   });
-  document.addEventListener('mouseup', () => {
+  document.addEventListener('pointerup', () => {
     if (!drag) return;
     drag = null;
     head.style.cursor = 'grab';
@@ -2337,12 +2353,16 @@ function _logsHud() {
   head.querySelector('#logs-min-btn').addEventListener('click', () => {
     setLogsMinimized(hud.dataset.minimized !== '1');
   });
-  // Restore minimized state on first render.
+  // Restore minimized state on first render. On a phone-width screen the
+  // expanded HUD would sit over the page, so it starts minimized and docked
+  // bottom-right there (still draggable, ▸ expands it). That narrow-screen
+  // default is not saved, so the desktop preference is left untouched.
   let wasMin = false;
   try { wasMin = localStorage.getItem(_LOGS_HUD_MIN_KEY) === '1'; } catch (e) {}
-  if (wasMin) {
+  const narrow = window.matchMedia('(max-width: 600px)').matches;
+  if (wasMin || narrow) {
     // Defer one tick so the DOM is settled before we hide body etc.
-    requestAnimationFrame(() => setLogsMinimized(true));
+    requestAnimationFrame(() => setLogsMinimized(true, { persist: !narrow, dock: narrow }));
   }
   return hud;
 }
@@ -2361,7 +2381,8 @@ function _anchorHudTopLeft(el) {
   el.style.right = ''; el.style.bottom = '';
 }
 
-function setLogsMinimized(min) {
+function setLogsMinimized(min, opts) {
+  const { persist = true, dock = false } = opts || {};
   const hud  = _logsHud();
   const body = document.getElementById('logs-hud-body');
   const btn  = document.getElementById('logs-min-btn');
@@ -2388,6 +2409,7 @@ function setLogsMinimized(min) {
       hud.style.width  = savedSize.w + 'px';
       hud.style.height = savedSize.h + 'px';
     } else {
+      hud.style.width  = '340px';   // undo a narrow-screen dock's max-content width
       hud.style.height = '240px';
     }
     hud.style.resize  = 'both';
@@ -2398,7 +2420,21 @@ function setLogsMinimized(min) {
   // bottom-right resize handle grows normally again (the #487 bottom-pin is
   // only needed for the duration of the collapse/grow, not afterward).
   _anchorHudTopLeft(hud);
-  try { localStorage.setItem(_LOGS_HUD_MIN_KEY, min ? '1' : '0'); } catch (e) {}
+  if (dock) {
+    // Narrow screens: shrink the bar to its contents and park it bottom-right.
+    hud.style.width = 'max-content';   // one line, no wrapped header
+    const r = hud.getBoundingClientRect();
+    hud.style.left = Math.max(0, window.innerWidth - r.width - 10) + 'px';
+    hud.style.top = Math.max(0, window.innerHeight - r.height - 10) + 'px';
+  } else if (!min) {
+    // Expanding a docked bar: keep the full panel on screen.
+    const r = hud.getBoundingClientRect();
+    hud.style.left = Math.max(0, Math.min(r.left, window.innerWidth - r.width - 8)) + 'px';
+    hud.style.top = Math.max(0, Math.min(r.top, window.innerHeight - r.height - 8)) + 'px';
+  }
+  if (persist) {
+    try { localStorage.setItem(_LOGS_HUD_MIN_KEY, min ? '1' : '0'); } catch (e) {}
+  }
 }
 
 // Start the clock once; always running while HUD exists (it's always on now).
@@ -5742,13 +5778,35 @@ function _tkTiles(o, d7, d30) {
       'Older sub-agent transcripts recorded only the start of each reply, so their output tokens are estimated from the reply size. They add ' + _tkMoney(est.outputLift) + ' over the recorded figure.') +
     '</div>';
 }
+function _tkNiceMax(x) {
+  // Round the axis top up to 1, 2, 2.5 or 5 x 10^n so the gridline labels read cleanly.
+  if (!(x > 0)) return 1;
+  const e = Math.pow(10, Math.floor(Math.log10(x)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * e >= x) return m * e;
+  return 10 * e;
+}
 function _tkDaily(o) {
   const days = o.byDay || [];
-  const max = Math.max(0.01, ...days.map(d => d.cost));
-  const bars = days.map(d => '<div class="tk-bar" data-tip="' + _tkEsc(d.day + ' · ' + _tkMoney(d.cost) + ' · ' + d.replies.toLocaleString('en-US') + ' replies') + '"><i style="height:' + (d.cost / max * 100).toFixed(1) + '%"></i></div>').join('');
-  const lab = s => s ? s.slice(5) : '';
-  return '<section class="tk-card"><h3>Daily cost <span class="tk-note">peak ' + _tkMoney(max) + '</span></h3>' +
-    '<div class="tk-bars">' + bars + '</div><div class="tk-bar-axis"><span>' + lab(days[0] && days[0].day) + '</span><span>' + lab(days.length && days[days.length - 1].day) + '</span></div></section>';
+  const peak = Math.max(0, ...days.map(d => d.cost));
+  const top = _tkNiceMax(peak);
+  const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const bars = days.map(d => {
+    const lab = fmtDay(d.day) + ' · ' + _tkMoney(d.cost) + ' · ' + d.replies.toLocaleString('en-US') + ' replies';
+    return '<div class="tk-bar" role="img" aria-label="' + _tkEsc(lab) + '" data-tip="' + _tkEsc(lab) + '"><i style="height:' + (d.cost / top * 100).toFixed(2) + '%"></i></div>';
+  }).join('');
+  const ys = [top, top / 2, 0];
+  const yLab = v => v === 0 ? '$0' : _tkMoney(v).replace(/\.00$/, '');
+  const yaxis = '<div class="tk-yaxis">' + ys.map((v, i) => '<span style="top:' + (i * 50) + '%">' + yLab(v) + '</span>').join('') +
+    '<span class="tk-ywidth">' + yLab(top) + '</span></div>';
+  const grid = ys.map((v, i) => '<div class="tk-grid-line' + (v === 0 ? ' base' : '') + '" style="top:' + (i * 50) + '%"></div>').join('');
+  // Date ticks: first, last, and evenly spaced ones between (about 4 in all).
+  const n = days.length, ticks = new Set([0, n - 1]);
+  const step = Math.max(1, Math.round((n - 1) / 3));
+  for (let i = step; i < n - 1 - step / 2; i += step) ticks.add(i);
+  const xaxis = '<div class="tk-xaxis">' + [...ticks].sort((a, b) => a - b).map(i =>
+    '<span class="' + (i === 0 ? 'first' : i === n - 1 ? 'last' : '') + '" style="left:' + (n > 1 ? (i + 0.5) / n * 100 : 50) + '%">' + _tkEsc(fmtDay(days[i].day)) + '</span>').join('') + '</div>';
+  return '<section class="tk-card"><h3>Daily cost <span class="tk-note">peak ' + _tkMoney(peak) + ' · hover or tap a bar</span></h3>' +
+    '<div class="tk-chart">' + yaxis + '<div class="tk-plot">' + grid + '<div class="tk-bars">' + bars + '</div></div>' + xaxis + '</div></section>';
 }
 function _tkParts(o) {
   const c = o.totals.components, k = o.totals.tokens;
@@ -5775,8 +5833,8 @@ function _tkProjects(o) {
     '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cp.exact.share) + ' (working folder, session board, parent session) · inferred ' + _tkPct(cp.inferred.share) + ' (files touched) · unattributed ' + _tkPct(cp.unattributed.share) + '</div></section>';
 }
 function _tkCards(o) {
-  const rows = (o.byCard || []).filter(c => c.key).slice(0, 10).map(c => '<tr><td class="name" title="' + _tkEsc((c.project || '') + ' ' + c.label + ' ' + (c.title || '')) + '">' +
-    '<span class="sub">' + _tkEsc(c.project || '') + '</span> ' + _tkEsc(c.label) + ' ' + _tkEsc(c.title || '') + '</td>' +
+  const rows = (o.byCard || []).filter(c => c.key).slice(0, 10).map(c => '<tr><td class="name" title="' + _tkEsc(c.label + ' ' + (c.title || '')) + '">' +
+    '<span class="sub">' + _tkEsc(c.project || '') + ' #' + _tkEsc(c.num) + '</span> ' + _tkEsc(c.title || '') + '</td>' +
     '<td class="num">' + _tkMoney(c.cost) + '</td><td class="num tk-hide-sm">' + _tkPct(c.share) + '</td><td class="num">' + _tkConf(c.confidence) + '</td></tr>').join('');
   const cc = o.confidence.card;
   return '<section class="tk-card"><h3>Cards</h3>' +
@@ -5840,19 +5898,32 @@ function _tkWire(el) {
   });
   const tip = el.querySelector('#tk-tip');
   if (!tip) return;
-  el.onmousemove = e => {
-    const t = e.target.closest('[data-tip]');
+  // Hover (mouse) and tap (touch) both show the tooltip and mark the bar.
+  let tipTimer = null;
+  const show = (t, cx, cy) => {
+    el.querySelectorAll('.tk-bar.on').forEach(b => b.classList.remove('on'));
     if (!t) { tip.style.display = 'none'; return; }
+    if (t.classList.contains('tk-bar')) t.classList.add('on');
     tip.textContent = t.dataset.tip;
     tip.style.display = 'block';
     const w = tip.offsetWidth, h = tip.offsetHeight;
-    let x = e.clientX + 12, y = e.clientY - h - 10;
-    if (x + w > window.innerWidth - 8) x = e.clientX - w - 12;
-    if (y < 8) y = e.clientY + 16;
+    let x = cx + 12, y = cy - h - 10;
+    if (x + w > window.innerWidth - 8) x = cx - w - 12;
+    if (x < 8) x = 8;
+    if (y < 8) y = cy + 16;
     tip.style.left = x + 'px';
     tip.style.top = y + 'px';
   };
-  el.onmouseleave = () => { tip.style.display = 'none'; };
+  el.onmousemove = e => show(e.target.closest('[data-tip]'), e.clientX, e.clientY);
+  el.onmouseleave = () => show(null);
+  el.onclick = e => {   // property, not addEventListener: _tkWire runs on every rebuild
+    const t = e.target.closest('[data-tip]');
+    if (!t) return;
+    const r = t.getBoundingClientRect();
+    show(t, r.left + r.width / 2, r.top);
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(() => show(null), 3000);
+  };
 }
 
 // ===== View switcher (Board / Calendar / Tokens) =====
