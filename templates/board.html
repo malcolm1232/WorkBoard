@@ -463,7 +463,7 @@
     gap: 8px;
     padding: 12px;
     overflow: auto;
-    height: calc(100% - 48px);
+    height: calc(100% - var(--hdr-h, 48px));
     align-items: flex-start;
   }
   /* #514 — Cmd/Ctrl-held hand-tool: grab affordance, then grabbing while panning.
@@ -1178,11 +1178,35 @@
     background: var(--card-bg); color: var(--ink);
     box-shadow: 0 1px 2px rgba(44,38,32,.08);
   }
+  /* Phones: one 48px row cannot hold the project switcher + title + controls,
+     and the pieces were drawing over each other ("+N Boards" chip under the
+     title and Tags). The header wraps to two rows: the switcher gets the whole
+     first row, title + Tags + view toggle the second. The views below size
+     from --hdr-h (measured by a ResizeObserver), so nothing is pushed off
+     screen. The column-layout tools (Reset Columns / Sort Time) are desktop
+     board-arranging affordances and are dropped here. */
+  @media (max-width: 860px) {
+    header { height: auto; min-height: 48px; flex-wrap: wrap; row-gap: 6px; padding: 6px 14px; }
+    header #project-tabs { flex: 1 1 100%; margin-right: 0; }
+    /* basis 0: the title takes what row two leaves and ellipsizes, instead of
+       pushing the controls onto a third row */
+    header .title-wrap { flex: 1 1 0; }
+    header .sp { display: none; }
+    header button, header .header-pill, header .view-toggle { white-space: nowrap; flex-shrink: 0; }
+  }
+  @media (max-width: 600px) {
+    header { gap: 8px; padding: 6px 10px; }
+    header #cols-pill { display: none !important; }
+    header h1 { font-size: 16px; padding: 3px 4px; }
+    header #tags-btn { padding: 5px 8px; }
+    .view-toggle { margin-right: 0; }
+    .view-toggle button { padding: 4px 8px; }
+  }
 
   /* ===== Calendar v2 — calmer, more breathing room, summary + filter ===== */
   #calendar {
     display: none;
-    height: calc(100% - 48px);
+    height: calc(100% - var(--hdr-h, 48px));
     padding: 20px 28px 24px;
     background: var(--bg);
     color: var(--ink);
@@ -1800,6 +1824,119 @@
      blinking ▶ RECONCILING status still convey "working". */
   #load-hud.lh-recon .lh-count,
   #load-hud.lh-recon .lh-pct{display:none;}
+
+  /* ===== #958 Tokens view - API-equivalent cost of the Claude sessions behind the
+     board. Same frame as the Calendar (bg, padding, topbar, pill controls). The
+     five cost-part colours are the dataviz reference categorical slots 1-5 in
+     fixed order (validated: CVD + normal-vision separation pass); each swatch
+     sits beside its printed value, which is the contrast relief. ===== */
+  #tokens {
+    display: none;
+    height: calc(100% - var(--hdr-h, 48px));
+    padding: 20px 28px 32px;
+    background: var(--bg);
+    color: var(--ink);
+    overflow-y: auto;
+    overflow-x: hidden;
+    --tk-1: #2a78d6; --tk-2: #eb6834; --tk-3: #1baf7a; --tk-4: #eda100; --tk-5: #e87ba4;
+  }
+  .tk-inner { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  .tk-topbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .tk-topbar h2 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+  .tk-basis { font-size: 12px; color: var(--muted); }
+  .tk-controls { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tk-seg {
+    display: inline-flex; border: 1px solid var(--card-border); border-radius: 999px;
+    background: var(--card-bg); padding: 2px;
+  }
+  .tk-seg button {
+    border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500;
+    padding: 4px 12px; border-radius: 999px; cursor: pointer; font-family: inherit;
+    transition: background .12s, color .12s;
+  }
+  .tk-seg button:hover { color: var(--ink); }
+  .tk-seg button.active { background: var(--ink); color: #fff; }
+  .tk-crumb { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .tk-crumb button {
+    border: 1px solid var(--card-border); background: var(--card-bg); color: var(--ink);
+    border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .tk-crumb button:hover { border-color: var(--muted); }
+  .tk-crumb strong { color: var(--ink); font-weight: 600; }
+  .tk-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .tk-tile {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px;
+    padding: 12px 14px; box-shadow: var(--shadow); min-width: 0;
+  }
+  .tk-tile .tk-k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .tk-tile .tk-v { font-size: 24px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .tk-tile .tk-s { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .tk-card {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px;
+    padding: 14px 16px; box-shadow: var(--shadow); min-width: 0;
+  }
+  .tk-card.wide { grid-column: 1 / -1; }
+  .tk-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
+  .tk-card h3 .tk-note { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .tk-bars { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding-top: 4px; }
+  .tk-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: default; }
+  .tk-bar > i {
+    display: block; width: 100%; background: var(--tk-1); border-radius: 4px 4px 0 0; min-height: 1px;
+  }
+  .tk-bar:hover > i { filter: brightness(1.12); }
+  .tk-bar-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .tk-stack { display: flex; height: 14px; gap: 2px; border-radius: 4px; overflow: hidden; margin: 2px 0 12px; }
+  .tk-stack > i { display: block; min-width: 0; }
+  .tk-legend { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px 12px; font-size: 12px; align-items: center; }
+  .tk-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .tk-legend .num, .tk-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tk-legend .muted { color: var(--muted); }
+  .tk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: auto; }
+  .tk-table th {
+    text-align: left; font-weight: 600; font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .04em; padding: 0 8px 6px 0; border-bottom: 1px solid var(--card-border); white-space: nowrap;
+  }
+  .tk-table th.num { text-align: right; }
+  .tk-table td { padding: 6px 8px 6px 0; border-bottom: 1px solid rgba(44,38,32,.06); vertical-align: middle; }
+  .tk-table th:last-child, .tk-table td:last-child { padding-right: 0; }
+  .tk-table tr:last-child td { border-bottom: 0; }
+  .tk-table td.name { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tk-table tr.click { cursor: pointer; }
+  .tk-table tr.click:hover td { background: rgba(217,119,87,.06); }
+  .tk-table .sub { color: var(--muted); }
+  .tk-conf { display: inline-flex; height: 6px; width: 56px; border-radius: 3px; overflow: hidden; gap: 1px; vertical-align: middle; background: var(--neutral); }
+  .tk-conf > i { display: block; }
+  .tk-conf .exact { background: var(--ink); }
+  .tk-conf .inferred { background: #b3a99f; }
+  .tk-tag {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
+    background: var(--neutral); color: var(--muted); margin-left: 6px; vertical-align: 1px;
+  }
+  .tk-insights { margin: 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  .tk-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .tk-split > div { border: 1px solid var(--card-border); border-radius: 6px; padding: 8px 10px; }
+  .tk-split .tk-k { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .tk-split .tk-v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tk-split .tk-s { font-size: 12px; color: var(--muted); }
+  .tk-foot { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .tk-empty { padding: 40px 0; text-align: center; color: var(--muted); }
+  .tk-tip {
+    position: fixed; z-index: 500; pointer-events: none; background: var(--ink); color: #fff;
+    font-size: 12px; padding: 6px 9px; border-radius: 6px; white-space: nowrap;
+    box-shadow: var(--shadow-hover); font-variant-numeric: tabular-nums; display: none;
+  }
+  @media (max-width: 1100px) {
+    .tk-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 860px) {
+    #tokens { padding: 14px 16px 28px; }
+    .tk-grid { grid-template-columns: minmax(0, 1fr); }
+    .tk-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tk-controls { margin-left: 0; width: 100%; }
+    .tk-hide-sm { display: none; }
+    .tk-tile .tk-v { font-size: 20px; }
+  }
 </style>
 </head>
 <body>
@@ -1820,6 +1957,7 @@
   <span class="view-toggle" id="view-toggle" style="display:none">
     <button data-view="board" class="active">Board</button>
     <button data-view="calendar">Calendar</button>
+    <button data-view="tokens" title="Token use and API-equivalent cost of the Claude sessions behind your boards">Tokens</button>
   </span>
 </header>
 
@@ -1835,6 +1973,7 @@
 
 <div id="board" style="display:none"></div>
 <div id="calendar"></div>
+<div id="tokens"></div>
 
 <div class="modal-overlay" id="modal-overlay"></div>
 
@@ -5473,13 +5612,257 @@ function wireBoardTitle() {
   });
 }
 
-// ===== View switcher (Board / Calendar) =====
+// ===== #958 Tokens view =====
+// API-equivalent cost of the Claude Code sessions behind every board (GET /tokens).
+// Data is cached per (window, scope, project) and refetched at most once a minute,
+// so render() ticks from the board poll never rebuild the view or reset its scroll.
+const _tk = { win: 7, scope: 'all', project: null, projectLabel: null, cache: {}, loading: {} };
+const TK_PARTS = [
+  ['output', 'Output', '--tk-1'],
+  ['cacheRead', 'Cache read', '--tk-2'],
+  ['cacheWrite5m', 'Cache write, 5 min TTL', '--tk-3'],
+  ['cacheWrite1h', 'Cache write, 1 hour TTL', '--tk-4'],
+  ['uncachedInput', 'Uncached input', '--tk-5'],
+];
+function _tkEsc(s) {
+  return String(s == null ? '' : s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+}
+function _tkMoney(x) {
+  x = x || 0;
+  if (Math.abs(x) >= 1000) return '$' + Math.round(x).toLocaleString('en-US');
+  if (Math.abs(x) >= 100) return '$' + x.toFixed(0);
+  return '$' + x.toFixed(2);
+}
+function _tkPct(x, d) { return ((x || 0) * 100).toFixed(d == null ? 0 : d) + '%'; }
+function _tkTok(n) {
+  n = n || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function _tkKey(win) {
+  return [apiBase, win, _tk.scope, _tk.project || ''].join('|');
+}
+function _tkUrl(win) {
+  let u = apiBase + '/tokens?since=' + win + 'd';
+  if (_tk.project) u += '&project=' + encodeURIComponent(_tk.project);
+  else if (_tk.scope === 'board') u += '&scope=board';
+  return u;
+}
+async function _tkLoad(win, force) {
+  const k = _tkKey(win);
+  const c = _tk.cache[k];
+  if (!force && c && (Date.now() - c.at) < 60000) return c.data;
+  if (_tk.loading[k]) return _tk.loading[k];
+  _tk.loading[k] = (async () => {
+    try {
+      const r = await fetch(_tkUrl(win), { cache: 'no-store' });
+      const data = await r.json();
+      if (!data.indexing) _tk.cache[k] = { at: Date.now(), data };
+      return data;
+    } catch (e) {
+      return { error: String(e) };
+    } finally {
+      delete _tk.loading[k];
+    }
+  })();
+  return _tk.loading[k];
+}
+function _tkSetControls(patch) {
+  Object.assign(_tk, patch);
+  const el = document.getElementById('tokens');
+  if (el) el.scrollTop = 0;
+  renderTokens(true);
+}
+// Entry point from render(): a no-op rebuild unless the data changed.
+async function renderTokens(rebuild) {
+  const el = document.getElementById('tokens');
+  if (!el) return;
+  const win = _tk.win;
+  const sig = _tkKey(win);
+  if (!el.firstChild || rebuild) {
+    el.innerHTML = '<div class="tk-inner">' + _tkTopbar(null) + '<div class="tk-empty">Loading token usage…</div></div>';
+    _tkWire(el);
+  }
+  const [main, d7, d30] = await Promise.all([_tkLoad(win), _tkLoad(7), _tkLoad(30)]);
+  if (_tkKey(_tk.win) !== sig || _view !== 'tokens') return;   // controls moved on meanwhile
+  const stamp = [main, d7, d30].map(x => (x && x.generatedAt) || '').join('|');
+  if (!rebuild && el.dataset.stamp === stamp && el.dataset.sig === sig) return;
+  el.dataset.stamp = stamp;
+  el.dataset.sig = sig;
+  const top = el.scrollTop;
+  if (main && main.indexing) {
+    el.innerHTML = '<div class="tk-inner">' + _tkTopbar(null) +
+      '<div class="tk-empty">Indexing your Claude Code transcripts for the first time. This takes about half a minute; the view fills in by itself.</div></div>';
+    _tkWire(el);
+    setTimeout(() => { if (_view === 'tokens') renderTokens(true); }, 5000);
+    return;
+  }
+  if (!main || main.error) {
+    el.innerHTML = '<div class="tk-inner">' + _tkTopbar(null) +
+      '<div class="tk-empty">Token usage is unavailable: ' + _tkEsc((main && main.error) || 'no response') + '</div></div>';
+    _tkWire(el);
+    return;
+  }
+  el.innerHTML = '<div class="tk-inner">' + _tkTopbar(main) + _tkTiles(main, d7, d30) +
+    '<div class="tk-grid">' +
+      _tkDaily(main) + _tkParts(main) +
+      _tkProjects(main) + _tkCards(main) +
+      _tkTurns(main) + _tkInsights(main) +
+      _tkBreaks(main) + _tkRent(main) +
+      _tkSessions(main) +
+    '</div>' + _tkFoot(main) + '</div><div class="tk-tip" id="tk-tip"></div>';
+  _tkWire(el);
+  el.scrollTop = top;
+}
+function _tkTopbar(o) {
+  const seg = (name, items, cur) => '<span class="tk-seg" data-seg="' + name + '">' +
+    items.map(([v, l]) => '<button data-v="' + v + '" class="' + (String(cur) === String(v) ? 'active' : '') + '">' + l + '</button>').join('') + '</span>';
+  let h = '<div class="tk-topbar"><h2>Tokens</h2><span class="tk-basis">API-equivalent list price, not a bill' +
+    (o ? ' · ' + _tkEsc(o.from) + ' to ' + _tkEsc(o.to) : '') + '</span>' +
+    '<span class="tk-controls">' + seg('win', [[7, '7 days'], [30, '30 days']], _tk.win) +
+    (_tk.project ? '' : seg('scope', [['all', 'All projects'], ['board', 'This board']], _tk.scope)) +
+    '</span></div>';
+  if (_tk.project) {
+    h += '<div class="tk-crumb"><button data-act="up">‹ All projects</button><span>Project</span><strong>' +
+      _tkEsc(_tk.projectLabel || _tk.project) + '</strong></div>';
+  }
+  return h;
+}
+function _tkTiles(o, d7, d30) {
+  const t = o.totals;
+  const tile = (k, v, s, tip) => '<div class="tk-tile"' + (tip ? ' title="' + _tkEsc(tip) + '"' : '') + '><div class="tk-k">' + k + '</div><div class="tk-v">' + v + '</div><div class="tk-s">' + s + '</div></div>';
+  const head = (d, n) => d && d.totals ? tile('Last ' + n + ' days', _tkMoney(d.totals.cost), _tkMoney(d.totals.cost / n) + ' per day · ' + d.totals.replies.toLocaleString('en-US') + ' replies') : tile('Last ' + n + ' days', '-', '');
+  const est = t.estimated;
+  return '<div class="tk-tiles">' + head(d7, 7) + head(d30, 30) +
+    tile('Cache hit rate', _tkPct(t.cacheHitRate, 1), _tkTok(t.tokens.cacheRead) + ' tokens re-read') +
+    tile('Agents', _tkPct(o.mainVsAgents.agentShare), _tkMoney(o.mainVsAgents.agents) + ' in sub-agents and workflows') +
+    tile('Estimated output', _tkPct(est.share), est.replies.toLocaleString('en-US') + ' replies',
+      'Older sub-agent transcripts recorded only the start of each reply, so their output tokens are estimated from the reply size. They add ' + _tkMoney(est.outputLift) + ' over the recorded figure.') +
+    '</div>';
+}
+function _tkDaily(o) {
+  const days = o.byDay || [];
+  const max = Math.max(0.01, ...days.map(d => d.cost));
+  const bars = days.map(d => '<div class="tk-bar" data-tip="' + _tkEsc(d.day + ' · ' + _tkMoney(d.cost) + ' · ' + d.replies.toLocaleString('en-US') + ' replies') + '"><i style="height:' + (d.cost / max * 100).toFixed(1) + '%"></i></div>').join('');
+  const lab = s => s ? s.slice(5) : '';
+  return '<section class="tk-card"><h3>Daily cost <span class="tk-note">peak ' + _tkMoney(max) + '</span></h3>' +
+    '<div class="tk-bars">' + bars + '</div><div class="tk-bar-axis"><span>' + lab(days[0] && days[0].day) + '</span><span>' + lab(days.length && days[days.length - 1].day) + '</span></div></section>';
+}
+function _tkParts(o) {
+  const c = o.totals.components, k = o.totals.tokens;
+  const sum = TK_PARTS.reduce((a, p) => a + (c[p[0]] || 0), 0) || 1;
+  const toks = { output: k.output, cacheRead: k.cacheRead, cacheWrite5m: k.cacheWrite5m, cacheWrite1h: k.cacheWrite1h, uncachedInput: k.uncachedInput };
+  const stack = TK_PARTS.filter(p => c[p[0]] > 0).map(p => '<i style="flex:' + c[p[0]] + ' 1 0;background:var(' + p[2] + ')" data-tip="' + _tkEsc(p[1] + ' · ' + _tkMoney(c[p[0]])) + '"></i>').join('');
+  const rows = TK_PARTS.map(p => '<span class="tk-sw" style="background:var(' + p[2] + ')"></span><span>' + p[1] + '</span><span class="num muted">' + _tkTok(toks[p[0]]) + '</span><span class="num">' + _tkMoney(c[p[0]]) + ' · ' + _tkPct(c[p[0]] / sum) + '</span>').join('');
+  const out = '<div class="tk-foot" style="margin-top:10px">Output ' + _tkTok(k.output) + ' tokens: ' + _tkTok(k.outputVisible) + ' visible, ' + _tkTok(k.outputThinking) + ' thinking, ' + _tkTok(k.outputSplitUnknown) + ' not split by older transcripts.</div>';
+  return '<section class="tk-card"><h3>Where the money goes <span class="tk-note">' + _tkMoney(o.totals.cost) + ' total</span></h3><div class="tk-stack">' + stack + '</div><div class="tk-legend">' + rows + '</div>' + out + '</section>';
+}
+function _tkConf(c) {
+  const tot = (c.exact || 0) + (c.inferred || 0) + (c.unattributed || 0) || 1;
+  const tip = 'exact ' + _tkPct(c.exact / tot) + ' · inferred ' + _tkPct(c.inferred / tot) + ' · unattributed ' + _tkPct(c.unattributed / tot);
+  return '<span class="tk-conf" data-tip="' + tip + '"><i class="exact" style="width:' + (c.exact / tot * 100) + '%"></i><i class="inferred" style="width:' + (c.inferred / tot * 100) + '%"></i></span>';
+}
+function _tkProjects(o) {
+  if (_tk.project) return '';
+  const rows = (o.byProject || []).slice(0, 10).map(p => '<tr class="' + (p.key ? 'click' : '') + '" data-project="' + _tkEsc(p.key || '') + '" data-label="' + _tkEsc(p.label) + '">' +
+    '<td class="name" title="' + _tkEsc(p.key || 'No project could be inferred') + '">' + _tkEsc(p.label) + (p.folder ? '<span class="tk-tag">folder</span>' : '') + '</td>' +
+    '<td class="num">' + _tkMoney(p.cost) + '</td><td class="num tk-hide-sm">' + _tkPct(p.share) + '</td><td class="num">' + _tkConf(p.confidence) + '</td></tr>').join('');
+  const cp = o.confidence.project;
+  return '<section class="tk-card"><h3>Projects <span class="tk-note">click a row to drill in</span></h3>' +
+    '<table class="tk-table"><thead><tr><th>Project</th><th class="num">Cost</th><th class="num tk-hide-sm">Share</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cp.exact.share) + ' (working folder, session board, parent session) · inferred ' + _tkPct(cp.inferred.share) + ' (files touched) · unattributed ' + _tkPct(cp.unattributed.share) + '</div></section>';
+}
+function _tkCards(o) {
+  const rows = (o.byCard || []).filter(c => c.key).slice(0, 10).map(c => '<tr><td class="name" title="' + _tkEsc((c.project || '') + ' ' + c.label + ' ' + (c.title || '')) + '">' +
+    '<span class="sub">' + _tkEsc(c.project || '') + '</span> ' + _tkEsc(c.label) + ' ' + _tkEsc(c.title || '') + '</td>' +
+    '<td class="num">' + _tkMoney(c.cost) + '</td><td class="num tk-hide-sm">' + _tkPct(c.share) + '</td><td class="num">' + _tkConf(c.confidence) + '</td></tr>').join('');
+  const cc = o.confidence.card;
+  return '<section class="tk-card"><h3>Cards</h3>' +
+    (rows ? '<table class="tk-table"><thead><tr><th>Card</th><th class="num">Cost</th><th class="num tk-hide-sm">Share</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="tk-foot">No card activity in this window.</div>') +
+    '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cc.exact.share) + ' (card event log) · inferred ' + _tkPct(cc.inferred.share) + ' (card.py calls in transcripts) · no card ' + _tkPct(cc.unattributed.share) + '</div></section>';
+}
+function _tkTurns(o) {
+  const cva = o.chatVsAction;
+  const split = '<div class="tk-split"><div><div class="tk-k">Chat only</div><div class="tk-v">' + _tkMoney(cva.chat.cost) + '</div><div class="tk-s">' + cva.chat.turns.toLocaleString('en-US') + ' turns</div></div>' +
+    '<div><div class="tk-k">With actions</div><div class="tk-v">' + _tkMoney(cva.action.cost) + '</div><div class="tk-s">' + cva.action.turns.toLocaleString('en-US') + ' turns, incl. agents</div></div></div>';
+  const rows = (o.turnClasses || []).map(c => '<tr><td class="name">' + _tkEsc(c.label) + '</td><td class="num tk-hide-sm">' + c.turns.toLocaleString('en-US') + '</td><td class="num">' + _tkMoney(c.own) + '</td><td class="num">' + _tkMoney(c.children) + '</td><td class="num tk-hide-sm">' + _tkMoney(c.median) + '</td></tr>').join('');
+  return '<section class="tk-card"><h3>Turns <span class="tk-note">main sessions, by what the turn did</span></h3>' + split +
+    '<table class="tk-table"><thead><tr><th>Kind</th><th class="num tk-hide-sm">Turns</th><th class="num">Own</th><th class="num">Agents</th><th class="num tk-hide-sm">Median</th></tr></thead><tbody>' + rows + '</tbody></table></section>';
+}
+function _tkInsights(o) {
+  const li = (o.insights || []).map(s => '<li>' + _tkEsc(s) + '</li>').join('');
+  return '<section class="tk-card"><h3>Insights</h3>' + (li ? '<ul class="tk-insights">' + li + '</ul>' : '<div class="tk-foot">Not enough activity in this window.</div>') + '</section>';
+}
+function _tkBreaks(o) {
+  const b = o.cacheBreaks;
+  const rows = (b.byCause || []).slice(0, 8).map(x => '<tr><td class="name">' + _tkEsc(x.cause) + ' <span class="sub">' + _tkEsc(x.who) + '</span></td><td class="num tk-hide-sm">' + x.n.toLocaleString('en-US') + '</td><td class="num">' + _tkTok(x.tokensWritten) + '</td><td class="num">' + _tkMoney(x.excess) + '</td></tr>').join('');
+  return '<section class="tk-card"><h3>Cache breaks <span class="tk-note">' + _tkMoney(b.total) + ' above cache hits, of ' + _tkMoney(b.allWrites) + ' writes</span></h3>' +
+    '<table class="tk-table"><thead><tr><th>Cause</th><th class="num tk-hide-sm">Breaks</th><th class="num">Rewritten</th><th class="num">Extra cost</th></tr></thead><tbody>' + rows + '</tbody></table></section>';
+}
+function _tkRent(o) {
+  const r = o.contextRent || {};
+  const tool = (r.tool && r.tool.top) || [], inj = (r.inject && r.inject.top) || [];
+  const row = x => '<tr><td class="name">' + _tkEsc(x.key) + '</td><td class="num tk-hide-sm">' + x.n.toLocaleString('en-US') + '</td><td class="num">' + _tkTok(x.tokens) + '</td><td class="num">' + _tkMoney(x.total) + '</td></tr>';
+  return '<section class="tk-card"><h3>Context bloat <span class="tk-note">cost of carrying content in context until compaction</span></h3>' +
+    '<table class="tk-table"><thead><tr><th>Tool results · ' + _tkMoney(r.tool ? r.tool.total : 0) + '</th><th class="num tk-hide-sm">Count</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody>' + tool.slice(0, 6).map(row).join('') + '</tbody></table>' +
+    '<table class="tk-table" style="margin-top:12px"><thead><tr><th>Injected context · ' + _tkMoney(r.inject ? r.inject.total : 0) + '</th><th class="num tk-hide-sm">Count</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody>' + inj.slice(0, 6).map(row).join('') + '</tbody></table></section>';
+}
+function _tkSessions(o) {
+  const s = o.sessions;
+  const when = iso => { if (!iso) return ''; const d = new Date(iso); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); };
+  const rows = (s.top || []).slice(0, 8).map(x => '<tr><td class="name" title="' + _tkEsc(x.session) + '"><span class="sub">' + _tkEsc(x.session.slice(0, 8)) + '</span> ' + _tkEsc(x.projectLabel) + '</td>' +
+    '<td class="num tk-hide-sm">' + _tkEsc(when(x.first)) + '</td><td class="num tk-hide-sm">' + (x.agents || 0) + '</td><td class="num">' + _tkMoney(x.own) + '</td><td class="num">' + _tkMoney(x.children) + '</td></tr>').join('');
+  return '<section class="tk-card wide"><h3>Sessions <span class="tk-note">a session plus every agent it started; top 5 are ' + _tkPct(s.top5Share) + ' of spend</span></h3>' +
+    '<table class="tk-table"><thead><tr><th>Session</th><th class="num tk-hide-sm">Started</th><th class="num tk-hide-sm">Agents</th><th class="num">Own cost</th><th class="num">Agent cost</th></tr></thead><tbody>' + rows + '</tbody></table></section>';
+}
+function _tkFoot(o) {
+  const t = o.totals;
+  let s = 'Prices as of ' + _tkEsc(o.pricesAsOf) + '. Cache writes cost 1.25x input (5 min TTL) or 2x (1 hour TTL); fast mode 2x. ' +
+    'Days follow this computer\'s time zone. Index updated ' + (o.lastScan ? _tkEsc(new Date(o.lastScan).toLocaleTimeString()) : 'never') + '.';
+  if (t.unpricedReplies) s += ' ' + t.unpricedReplies.toLocaleString('en-US') + ' replies use a model with no known price and count in tokens only.';
+  return '<div class="tk-foot">' + s + '</div>';
+}
+function _tkWire(el) {
+  el.querySelectorAll('.tk-seg').forEach(seg => {
+    seg.querySelectorAll('button').forEach(b => {
+      b.onclick = () => {
+        if (seg.dataset.seg === 'win') _tkSetControls({ win: Number(b.dataset.v) });
+        else _tkSetControls({ scope: b.dataset.v });
+      };
+    });
+  });
+  const up = el.querySelector('[data-act="up"]');
+  if (up) up.onclick = () => _tkSetControls({ project: null, projectLabel: null });
+  el.querySelectorAll('tr.click[data-project]').forEach(tr => {
+    tr.onclick = () => _tkSetControls({ project: tr.dataset.project, projectLabel: tr.dataset.label });
+  });
+  const tip = el.querySelector('#tk-tip');
+  if (!tip) return;
+  el.onmousemove = e => {
+    const t = e.target.closest('[data-tip]');
+    if (!t) { tip.style.display = 'none'; return; }
+    tip.textContent = t.dataset.tip;
+    tip.style.display = 'block';
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = e.clientX + 12, y = e.clientY - h - 10;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - 12;
+    if (y < 8) y = e.clientY + 16;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  };
+  el.onmouseleave = () => { tip.style.display = 'none'; };
+}
+
+// ===== View switcher (Board / Calendar / Tokens) =====
 let _view = 'board';
 let _calCursor = null; // first day of currently displayed month
 function setView(v) {
   _view = v;
   $('#board').style.display    = (v === 'board')    ? 'flex' : 'none';
   $('#calendar').style.display = (v === 'calendar') ? 'flex' : 'none';
+  $('#tokens').style.display   = (v === 'tokens')   ? 'block' : 'none';   // #958
   document.querySelectorAll('#view-toggle button').forEach(b => {
     b.classList.toggle('active', b.dataset.view === v);
   });
@@ -5562,6 +5945,8 @@ function render() {
     renderInboxColumn();
   } else if (_view === 'calendar') {
     renderCalendar();
+  } else if (_view === 'tokens') {
+    renderTokens();   // #958 - cached; rebuilds only when its data changes
   }
 
   // Modal renders on top of either view
@@ -8196,6 +8581,16 @@ async function init() {
   });
 
   initTooltipDelegation();
+
+  // The views fill the page below the header. The header is 48px on desktop but
+  // wraps to two rows on phones, so publish its live height as --hdr-h.
+  (function trackHeaderHeight() {
+    const hdr = document.querySelector('header');
+    if (!hdr) return;
+    const set = () => document.documentElement.style.setProperty('--hdr-h', hdr.offsetHeight + 'px');
+    set();
+    if (window.ResizeObserver) new ResizeObserver(set).observe(hdr);
+  })();
 
   document.querySelectorAll('#view-toggle button').forEach(b => {
     b.onclick = () => setView(b.dataset.view);

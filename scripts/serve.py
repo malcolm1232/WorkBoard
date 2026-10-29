@@ -54,7 +54,7 @@ if _scripts_dir not in sys.path:
 import _boardio  # noqa: E402  (write-safety: flock + rolling backups)
 import _render   # noqa: E402  (shared markdown/html renderers — #115 export)
 import _metrics  # noqa: E402  (velocity metrics — #114)
-import _tokens   # noqa: E402  (token + API-equivalent cost index — #958)
+import _tokens   # noqa: E402  (token + API-equivalent cost index, #958)
 import _tokens_report  # noqa: E402
 
 _write_lock = threading.Lock()
@@ -719,13 +719,13 @@ class BoardHandler(BaseHTTPRequestHandler):
     def _handle_tokens(self):
         """GET /tokens - #958 token + API-equivalent cost JSON (same dict as
         `card.py tokens --json`). ?since=Nd window (default 7); ?scope=board
-        narrows to this board's project. The index is refreshed by the
+        narrows to this board's project, ?project=<root path> to any project. The index is refreshed by the
         background scanner, never inside the request; before its first scan
         completes this answers {"indexing": true}."""
         qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         raw = (qs.get("since") or ["7"])[0].strip().rstrip("d")
         since_days = int(raw) if raw.isdigit() and 0 < int(raw) <= 3660 else 7
-        project = None
+        project = (qs.get("project") or [""])[0] or None   # drill-down: one project root
         if (qs.get("scope") or [""])[0] == "board":
             project = str(Path(self.board_dir).resolve().parent)
         _kick_token_scan()
