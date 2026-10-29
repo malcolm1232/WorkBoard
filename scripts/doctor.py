@@ -102,6 +102,26 @@ def check_runtime() -> tuple[str, str, str]:
             "start a session in a board project, or it auto-spawns on next prompt")
 
 
+def check_autoopen() -> tuple[str, str, str]:
+    """#959 - the auto-open tracker: last decisions, so a surprise tab can be
+    traced to its caller (hook source, bootstrap, board-new) and its gate."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _autoopen
+        rows = _autoopen.read_log(5)
+    except Exception as e:
+        return ("WARN", f"tracker unreadable ({type(e).__name__})", "")
+    if not rows:
+        return ("PASS", "no auto-open decisions logged yet",
+                "`card.py autoopen-log` once a session has started")
+    last = rows[-1]
+    opens = sum(1 for r in rows if r.get("action") == "open")
+    summary = (f"last: {last.get('action')} ({last.get('reason')}) :{last.get('port')} "
+               f"by {last.get('caller')}{('/' + last['source']) if last.get('source') else ''} "
+               f"at {last.get('ts')}; {opens} open(s) in the last {len(rows)}")
+    return ("PASS", summary, "full trail: `card.py autoopen-log`")
+
+
 def main() -> int:
     fix = "--fix" in sys.argv
     print(f"{DIM}board-steward install-doctor{' (--fix)' if fix else ''}{RESET}\n")
@@ -110,6 +130,7 @@ def main() -> int:
         ("plugin installed", check_installed()),
         ("plugin cache", check_cache()),
         ("runtime (onboarded + server)", check_runtime()),
+        ("auto-open tracker (#959)", check_autoopen()),
     ]
     worst_fail = False
     for name, (status, msg, fixhint) in checks:

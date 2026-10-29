@@ -40,6 +40,11 @@ _DROP_ASST_PROSE = os.environ.get("DIGEST_DROP_ASST", "1") != "0"
 # hatch for power users: BOARD_THINKING_TOKENS overrides the forced 0.
 _LLM_ENV = {**os.environ}
 _LLM_ENV["MAX_THINKING_TOKENS"] = os.environ.get("BOARD_THINKING_TOKENS", "0")
+# #959 - every `claude -p` here is a headless worker, yet it still fires the
+# plugin's SessionStart hook in the project it runs in. That hook auto-opens the
+# board, so a background fill could pop a tab (at night, for a board the user
+# was not looking at). Workers never open a browser.
+_LLM_ENV["BOARD_NO_AUTO_OPEN"] = "1"
 # A launcher that isolates CLAUDE_CONFIG_DIR (e.g. install.sh --demo) but still
 # needs `claude -p` to authenticate against the user's REAL Claude login exports
 # the real config dir here. Redirect claude -p ONLY — the rest of the isolation

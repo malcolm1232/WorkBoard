@@ -108,6 +108,7 @@ fi
 # board_autoopen.sh (Chrome-tab check → sseClients fallback → opens in Chrome).
 # BOARD_OPEN_EXPLICIT=1: a bootstrap is a request for this board, so it skips the
 # hook's once-per-day gate (a recycled port may already carry today's stamp).
-BOARD_OPEN_EXPLICIT=1 "$(dirname "$0")/board_autoopen.sh" "${want_port}" "${proj_root}" >/dev/null 2>&1 || true
+BOARD_OPEN_EXPLICIT=1 BOARD_OPEN_CALLER="bootstrap" \
+  "$(dirname "$0")/board_autoopen.sh" "${want_port}" "${proj_root}" >/dev/null 2>&1 || true
 
 echo "${want_port}"

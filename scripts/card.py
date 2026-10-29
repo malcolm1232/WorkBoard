@@ -430,6 +430,11 @@ def build_parser():
     pta.add_argument("--rm", action="store_true", help="remove the alias")
     pta.set_defaults(fn=cmd_telegram_alias)
 
+    pal = sub.add_parser("autoopen-log",
+                         help="show the auto-open tracker (#959): every browser-open "
+                              "decision from every path, newest last")
+    pal.add_argument("-n", type=int, default=30, help="lines to show (0 = all)")
+
     return ap
 
 
@@ -585,7 +590,8 @@ def cmd_board_new(args):
             sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
             # board-new is an explicit request → skip the hook's once-per-day gate.
             subprocess.Popen(["bash", str(ao), str(port), str(proj), sid],
-                             env={**os.environ, "BOARD_OPEN_EXPLICIT": "1"},
+                             env={**os.environ, "BOARD_OPEN_EXPLICIT": "1",
+                                  "BOARD_OPEN_CALLER": "board-new"},
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
         except Exception:
@@ -667,6 +673,13 @@ def main():
     # any one board — same board-less shape as board-new.
     if getattr(args, "cmd", None) in ("telegram-setup", "telegram-alias"):
         return args.fn(args)
+    # autoopen-log (#959) reads the global auto-open tracker, not a board.
+    if getattr(args, "cmd", None) == "autoopen-log":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _autoopen
+        print(_autoopen.format_log(_autoopen.read_log(args.n)))
+        print(f"\nlog: {_autoopen.LOG_PATH}")
+        return 0
     # tokens (#958) reads every transcript, not one board; --board only narrows.
     if getattr(args, "cmd", None) == "tokens":
         args.board_filter = hoisted or (str(args.board) if args.board else None)

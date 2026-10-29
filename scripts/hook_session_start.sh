@@ -20,13 +20,19 @@ set -u
 # stdin → empty id → the fresh-session global/mtime fallback (today's behaviour).
 # Never errors (|| true + except) so startup + exit 0 are preserved.
 hook_stdin="$(cat 2>/dev/null || true)"
-session_id="$(printf '%s' "${hook_stdin}" | python3 -c '
+# #959 - also keep the SessionStart `source` (startup|resume|clear|compact): the
+# auto-open gate logs it and never opens on a compaction (not a new session).
+hook_meta="$(printf '%s' "${hook_stdin}" | python3 -c '
 import sys, json
 try:
-    print(json.load(sys.stdin).get("session_id", "") or "")
+    d = json.load(sys.stdin)
+    print((d.get("session_id", "") or "") + " " + (d.get("source", "") or ""))
 except Exception:
     pass
 ' 2>/dev/null || true)"
+session_id="${hook_meta%% *}"
+hook_source="${hook_meta#* }"
+[ "${hook_source}" = "${hook_meta}" ] && hook_source=""
 
 # Walk up from CWD looking for board/board.json (max 8 levels).
 dir="${PWD}"
@@ -313,7 +319,10 @@ if [ -n "${server_health}" ]; then
   # id was parsed from stdin above; board_autoopen reads it from $3 (or the env
   # var as fallback). Without this, hook-opened tabs were sid-less while agent-run
   # board-new tabs had one → the "some have sid, some don't" inconsistency.
-  "$(dirname "$0")/board_autoopen.sh" "${server_port}" "${project_dir}" "${session_id}" >/dev/null 2>&1 || true
+  # #959 - tag the caller + SessionStart source for the auto-open tracker
+  # (~/.board-steward/autoopen.jsonl, `card.py autoopen-log`).
+  BOARD_OPEN_CALLER="session-start" BOARD_OPEN_SOURCE="${hook_source}" \
+    "$(dirname "$0")/board_autoopen.sh" "${server_port}" "${project_dir}" "${session_id}" >/dev/null 2>&1 || true
   # #505 — fire a one-shot 'session refresh' divider into the Logs HUD so a fresh
   # session is visually separated from the previous one's activity. Detached +
   # bounded so it never delays startup; waits (≤4s) for a connected SSE client

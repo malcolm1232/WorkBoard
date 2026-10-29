@@ -49,13 +49,15 @@ class Rig:
         self.home = tmp / "home"; self.home.mkdir()
         self.bin = tmp / "bin"; self.bin.mkdir()
         self.open_log = tmp / "open.log"
-        self.tab_flag = tmp / "tab_present"      # exists → osascript says "yes"
-        self._shim("open", f'echo "$@" >> "{self.open_log}"\n')
-        self._shim("osascript", f'cat >/dev/null; [ -f "{self.tab_flag}" ] && echo yes || echo no\n')
-        self._shim("pgrep", "exit 0\n")          # "Chrome is running"
+        self.tab_flag = tmp / "tab_present"      # exists → osascript lists a board tab
         self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Health)
         self.port = self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self._shim("open", f'echo "$@" >> "{self.open_log}"\n')
+        # #959 protocol: pid line, window count, then one loopback URL per line.
+        self._shim("osascript", 'cat >/dev/null; echo "pid:4242"; echo "windows:1"; '
+                                f'[ -f "{self.tab_flag}" ] && echo "http://localhost:{self.port}/?sid=x"; exit 0\n')
+        self._shim("pgrep", "echo 4242\n")       # "Chrome is running" (pid 4242)
         self.stamp = self.home / ".board-steward" / f".opened-{self.port}"
 
     def _shim(self, name, body):
@@ -86,9 +88,11 @@ class Rig:
         return len(self.open_log.read_text().splitlines()) if self.open_log.exists() else 0
 
     def age_stamp(self, seconds):
-        """Push the stamp's mtime past the #122 cooldown without changing its day."""
+        """Push the stamps' mtime past the #122 cooldown without changing their
+        day (#959: the per-port stamp AND the global .opened-any stamp)."""
         t = time.time() - seconds
-        os.utime(self.stamp, (t, t))
+        for p in self.stamp.parent.glob(".opened-*"):
+            os.utime(p, (t, t))
 
     def close(self):
         self.srv.shutdown()
@@ -126,14 +130,18 @@ def scenario():
 
             print("next day")
             yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
-            r.stamp.write_text(yesterday + "\n"); r.age_stamp(86400)
+            r.stamp.write_text(yesterday + "\n")
+            (r.stamp.parent / ".opened-any").write_text(yesterday + "\n")   # #959 global stamp
+            r.age_stamp(86400)
             r.run()
             check(r.opens() == 3, "yesterday's stamp → first session today opens again")
             r.age_stamp(COOLDOWN + 60); r.run()
             check(r.opens() == 3, "…and only once")
 
             print("legacy + opt-out")
-            r.stamp.write_text(""); r.age_stamp(COOLDOWN + 60)   # pre-fix empty stamp
+            r.stamp.write_text("")                                 # pre-fix empty stamp
+            (r.stamp.parent / ".opened-any").unlink()              # pre-#959: no global stamp
+            r.age_stamp(COOLDOWN + 60)
             r.run()
             check(r.opens() == 4, "legacy empty stamp is not 'today' → opens, then self-heals")
             check(r.stamp.read_text().strip() == date.today().strftime("%Y%m%d"),
