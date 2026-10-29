@@ -435,7 +435,57 @@ def build_parser():
                               "decision from every path, newest last")
     pal.add_argument("-n", type=int, default=30, help="lines to show (0 = all)")
 
+    # autocreate (#960) - settings for automatic boards in new projects
+    # (~/.board-steward/config.json). Board-less, like board-new.
+    pac = sub.add_parser("autocreate",
+                         help="automatic boards for new projects: "
+                              "`autocreate status` | `autocreate mode auto|ask|off` | "
+                              "`autocreate never <path>` | `autocreate allow <path>`")
+    pac.add_argument("action", choices=["status", "mode", "never", "allow"])
+    pac.add_argument("value", nargs="?", default=None,
+                     help="mode: auto|ask|off; never/allow: folder path (default: current folder)")
+    pac.set_defaults(fn=cmd_autocreate)
+
     return ap
+
+
+def cmd_autocreate(args):
+    """#960 — show or change the automatic-board settings.
+
+      status            current mode + never-list
+      mode auto|ask|off auto = create a board in each new project (default),
+                        ask = Claude asks first, off = never create
+      never <path>      never auto-create in this folder or below it
+      allow <path>      remove a folder from the never-list
+    """
+    import _autocreate as ac
+    cfg = ac.load_config()
+    if args.action == "status":
+        print(f"auto_create: {cfg['auto_create']}")
+        print("never: " + (", ".join(cfg["never"]) if cfg["never"] else "(none)"))
+        print(f"settings: {ac.config_path()}")
+        return 0
+    if args.action == "mode":
+        if args.value not in ac.MODES:
+            print(f"error: mode must be one of {', '.join(ac.MODES)}", file=sys.stderr)
+            sys.exit(2)
+        cfg["auto_create"] = args.value
+        ac.save_config(cfg)
+        print(f"automatic boards: {args.value}")
+        return 0
+    path = str(ac._real(args.value or os.getcwd()))
+    if args.action == "never":
+        if path not in cfg["never"]:
+            cfg["never"].append(path)
+        ac.save_config(cfg)
+        print(f"no automatic board in {path} (or below it)")
+        return 0
+    before = len(cfg["never"])
+    cfg["never"] = [n for n in cfg["never"] if str(ac._real(n)) != path]
+    ac.save_config(cfg)
+    print(f"{path} removed from the never list" if len(cfg["never"]) < before
+          else f"{path} was not in the never list")
+    return 0
 
 
 
@@ -671,7 +721,7 @@ def main():
         return cmd_board_new(args)
     # telegram-setup / telegram-alias operate on the Telegram config, not on
     # any one board — same board-less shape as board-new.
-    if getattr(args, "cmd", None) in ("telegram-setup", "telegram-alias"):
+    if getattr(args, "cmd", None) in ("telegram-setup", "telegram-alias", "autocreate"):
         return args.fn(args)
     # autoopen-log (#959) reads the global auto-open tracker, not a board.
     if getattr(args, "cmd", None) == "autoopen-log":
