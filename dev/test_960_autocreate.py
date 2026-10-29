@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#960 — which folders get an automatic board (scripts/_autocreate.py).
+"""#960 - which folders get an automatic board (scripts/_autocreate.py).
 
 Every rule of the decision is exercised against a throwaway HOME: container
 folders, system / scratch / tool trees, a Desktop sub-folder, Downloads with and
@@ -269,8 +269,8 @@ def main():
         n2 = notice()
         check("first automatic board" not in n2 and "7950" in n2 and len(n2) < len(n1) / 2,
               "later notice: one short line")
-        a = ac.ask_notice(str(H / "Desktop" / "a"), "/x/bootstrap_project.sh", "/x/card.py")
-        check("yes / no / never" in a and "bootstrap_project.sh" in a and "autocreate never" in a,
+        a = ac.ask_notice(str(H / "Desktop" / "a"), "/x/autocreate_board.sh", "/x/card.py")
+        check("yes / no / never" in a and "autocreate_board.sh" in a and "autocreate never" in a,
               "ask notice: one question with yes / no / never actions")
 
     print()

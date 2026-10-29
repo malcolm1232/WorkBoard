@@ -12,9 +12,9 @@
 # Haiku fly-in), wait for /health, OPEN the browser (the fly-in is gated on a
 # connected viewer — sseClients>0 — so without this the cards never fly),
 # install login autostart so it survives reboots, and write the global
-# .onboarded marker so the picker never re-offers / a 2nd board is never
-# auto-created. Adding more boards later is always explicit ("open a new
-# workboard for <project>").
+# .onboarded marker so the first-board picker never re-offers. Later new
+# projects get their own board automatically through autocreate_board.sh
+# (#960), which calls this script.
 #
 # If a board already exists for the project, we DON'T re-bootstrap — we just
 # ensure the server is up and open it (open-not-recreate, per the agreed rule).
@@ -75,7 +75,7 @@ fi
 python3 "${hook_dir}/install_autostart.py" --project "${proj_root}" --port "${want_port}" \
   >/dev/null 2>&1 || true
 
-# Mark onboarded so the picker never re-offers and no 2nd board auto-spawns.
+# Mark onboarded so the first-board picker never re-offers.
 mkdir -p "${HOME}/.board-steward" 2>/dev/null
 : > "${HOME}/.board-steward/.onboarded"
 

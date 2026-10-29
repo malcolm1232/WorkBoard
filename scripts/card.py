@@ -450,7 +450,7 @@ def build_parser():
 
 
 def cmd_autocreate(args):
-    """#960 — show or change the automatic-board settings.
+    """#960 - show or change the automatic-board settings.
 
       status            current mode + never-list
       mode auto|ask|off auto = create a board in each new project (default),

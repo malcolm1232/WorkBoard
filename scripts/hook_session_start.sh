@@ -34,18 +34,45 @@ session_id="${hook_meta%% *}"
 hook_source="${hook_meta#* }"
 [ "${hook_source}" = "${hook_meta}" ] && hook_source=""
 
-# Walk up from CWD looking for board/board.json (max 8 levels).
-dir="${PWD}"
+# #960 - one decision for "which board does this session belong to, and should
+# a new project get one?" (_autocreate.py: project root = git top-level or cwd,
+# worktrees map to their main repo, existing board at/above wins, deny-list,
+# person-vs-headless session, ~/.board-steward/config.json). Prints
+# action<TAB>root<TAB>board<TAB>reason; action is use|create|ask|skip.
+# The payload's cwd is the session's cwd; PWD is the same for a normal start.
+sess_cwd="$(printf '%s' "${hook_stdin}" | python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin).get("cwd", "") or "")
+except Exception:
+    pass
+' 2>/dev/null || true)"
+[ -d "${sess_cwd}" ] || sess_cwd="${PWD}"
+ac_action=""; ac_root=""; ac_board=""; ac_reason=""
+ac_line="$(BOARD_HOOK_PAYLOAD="${hook_stdin}" python3 "$(dirname "$0")/_autocreate.py" decide "${sess_cwd}" 2>/dev/null)"
+if [ -n "${ac_line}" ]; then
+  IFS=$'\t' read -r ac_action ac_root ac_board ac_reason <<<"${ac_line}"
+fi
+
 board_path=""
-for _ in 1 2 3 4 5 6 7 8; do
-  if [ -f "${dir}/board/board.json" ]; then
-    board_path="${dir}/board/board.json"
-    break
-  fi
-  parent="$(dirname "${dir}")"
-  [ "${parent}" = "${dir}" ] && break
-  dir="${parent}"
-done
+if [ "${ac_action}" = "use" ] && [ -f "${ac_board}" ]; then
+  board_path="${ac_board}"
+fi
+
+# Walk up from CWD looking for board/board.json (max 8 levels). Only the
+# fallback for when the decision helper could not run at all.
+if [ -z "${ac_action}" ]; then
+  dir="${PWD}"
+  for _ in 1 2 3 4 5 6 7 8; do
+    if [ -f "${dir}/board/board.json" ]; then
+      board_path="${dir}/board/board.json"
+      break
+    fi
+    parent="$(dirname "${dir}")"
+    [ "${parent}" = "${dir}" ] && break
+    dir="${parent}"
+  done
+fi
 
 # Fallback: if CWD-walk failed, search recent Claude session jsonls for a
 # board project DESCENDED FROM the current PWD. Catches "claude opened in
@@ -60,17 +87,51 @@ if [ -z "${board_path}" ]; then
   fi
 fi
 
-# ── First-run auto-bootstrap (#onboarding) ────────────────────────────────────
-# No board found by walk-up. On a FRESH plugin install (no global onboarded
-# marker yet) we bootstrap ONE board in the current project, so the very first
-# session after `claude plugin install` opens a live, self-filling board instead
-# of the silent "huh, now what?" dead-end. The /plugin path only wires hooks —
-# it never ran install.sh's bootstrap+autostart+open — so we do it here.
-# Fires AT MOST ONCE (the marker) and NEVER in $HOME / "/" (too broad — we'd
-# litter a board in a non-project dir). After that first board, additional boards
-# are explicit (serve.py --bootstrap, or just ask Claude). Opt out with
-# BOARD_NO_AUTO_BOOTSTRAP=1 (CI/headless/demo).
+# ── No board for this folder ─────────────────────────────────────────────────
+# A new project gets its own board automatically (#960, below), on the first
+# install and on every later new project alike. Folders that are not projects
+# ($HOME, ~/Desktop itself, ...) get the first-run picker until the user has a
+# board, and afterwards fall back to the last-active board. Opt out of
+# creation with BOARD_NO_AUTO_BOOTSTRAP=1 (CI/headless/demo) or
+# `card.py autocreate mode off`.
 onboard_marker="${HOME}/.board-steward/.onboarded"
+
+# ── #960 automatic board for a new project ───────────────────────────────────
+# A person's session in a folder that is a project (see _autocreate.py for the
+# exact rules) but has no board gets one, every time, not just on the first
+# install. The work (serve.py --bootstrap, autostart, browser) runs DETACHED in
+# autocreate_board.sh so session start never waits on it; the board.json is
+# written within a second or two, so card.py works almost at once. The tab
+# opens only when no WorkBoard tab is open anywhere; otherwise the new board
+# appears in the open tab's project switcher.
+if [ -z "${board_path}" ] && [ "${ac_action}" = "create" ]; then
+  hook_dir="$(dirname "$0")"
+  card_py="${hook_dir}/card.py"
+  ac_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${ac_root}/board" "${hook_dir}" 2>/dev/null || echo 7891)"
+  mkdir -p "${HOME}/.board-steward" 2>/dev/null
+  nohup bash "${hook_dir}/autocreate_board.sh" "${ac_root}" "${session_id}" \
+    >"${HOME}/.board-steward/autocreate.log" 2>&1 </dev/null &
+  disown 2>/dev/null || true
+  ac_notice="$(python3 "${hook_dir}/_autocreate.py" notice "${ac_root}" "${ac_port}" "${card_py}" 2>/dev/null)"
+  cat <<MSG
+<board-steward-session-start>
+${ac_notice}
+Board: ${ac_root}/board/board.json (being created now, live at http://127.0.0.1:${ac_port} in a few seconds)
+
+Protocol: every ship/fix/defer → \`${card_py} add\` or \`${card_py} fly\` immediately (no batching). Status queries → \`card.py list\`, not memory. Detail → \`card.py show <num>\`. Never auto-Read board.json.
+</board-steward-session-start>
+MSG
+  exit 0
+fi
+
+# "ask" mode: hand Claude a one-line question instead of creating, then carry
+# on with the usual fallback below so the session still has a board context.
+if [ -z "${board_path}" ] && [ "${ac_action}" = "ask" ]; then
+  hook_dir="$(dirname "$0")"
+  ac_ask="$(python3 "${hook_dir}/_autocreate.py" ask "${ac_root}" "${hook_dir}/autocreate_board.sh" "${hook_dir}/card.py" 2>/dev/null)"
+  [ -n "${ac_ask}" ] && printf '<board-steward-autocreate>\n%s\n</board-steward-autocreate>\n' "${ac_ask}"
+fi
+
 if [ -z "${board_path}" ]; then
   # Opted out → preserve the original silent exit (CI/headless/demo).
   if [ "${BOARD_NO_AUTO_BOOTSTRAP:-0}" = "1" ]; then
@@ -119,9 +180,20 @@ fi
 
 if [ -z "${board_path}" ]; then
 
-  # Resolve the project root: git top-level if we're in a repo, else CWD.
-  proj_root="$(cd "${PWD}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)"
-  [ -z "${proj_root}" ] && proj_root="${PWD}"
+  # Not onboarded yet and no board was auto-created (#960 handled every
+  # creatable project above). Headless / SDK sessions stop here: no picker,
+  # no board - a CI run must never set up the user's first board.
+  case "${ac_reason}" in "not a person's session"*) exit 0 ;; esac
+
+  # Project root as resolved by _autocreate.py (git top-level, else CWD).
+  proj_root="${ac_root}"
+  if [ -z "${proj_root}" ]; then
+    proj_root="$(cd "${PWD}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)"
+    [ -z "${proj_root}" ] && proj_root="${PWD}"
+  fi
+  # A container folder (~/Desktop, ~/Documents, ...) is treated like $HOME:
+  # offer the picker rather than litter a board there.
+  case "${ac_reason}" in "container folder"*) proj_root="${HOME}" ;; esac
 
   # Launched from $HOME / "/" (the usual case — users start Claude in a terminal
   # at home, not inside a repo). We do NOT litter a board here. Instead we
@@ -139,7 +211,7 @@ if [ -z "${board_path}" ]; then
     if [ -n "${projects}" ]; then
       cat <<EOF
 <board-steward-session-start>
-WorkBoard is installed and this session started in your home directory. The user
+WorkBoard is installed and this session started outside a project folder. The user
 has NOT created their first board yet. From their Claude session history, these
 are the projects they've actually worked in (most substantial first; tab =
 path<TAB>label):
@@ -204,7 +276,7 @@ EOF
     else
       cat <<'HINT'
 <board-steward-session-start>
-WorkBoard is installed, but this session started in your home directory and no
+WorkBoard is installed, but this session started outside a project folder and no
 prior project history was found to enumerate. To create your first board, cd into
 a project folder and start Claude there, or ask: "set up a board for <path>".
 </board-steward-session-start>
@@ -213,49 +285,10 @@ HINT
     exit 0
   fi
 
-  # Bootstrap: spawn serve.py --bootstrap (creates board/ + mines history into a
-  # one-by-one fly-in fill), install login autostart so it survives reboots, and
-  # mark onboarded so this never re-fires. The browser auto-opens via the shared
-  # block below once /health reports the server live.
-  hook_dir="$(dirname "$0")"
-  serve_py="${hook_dir}/serve.py"
-  board_dir="${proj_root}/board"
-  want_port="$(python3 -c "import sys; sys.path.insert(0, sys.argv[2]); import port_registry as pr; print(pr.assign(sys.argv[1]))" "${board_dir}" "${hook_dir}" 2>/dev/null || echo 7891)"
-  if [ -f "${serve_py}" ]; then
-    # env -u CLAUDECODE: the bootstrap fill + its end-of-fill reconcile_sweep run
-    # as subprocesses of this server; unset CLAUDECODE so they take the autonomous
-    # Haiku path, not the in-session prose recon_pending path (#recon).
-    env -u CLAUDECODE nohup python3 "${serve_py}" --project "${proj_root}" --port "${want_port}" --bootstrap \
-      >"${proj_root}/.board-server.log" 2>&1 </dev/null &
-    disown 2>/dev/null || true
-    # Wait for the server to bind + write board.json (bootstrap_board is sync).
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-      curl -s --max-time 0.3 "http://127.0.0.1:${want_port}/health" >/dev/null 2>&1 && break
-      sleep 0.4
-    done
-    # Survive reboots (the gap that killed the server today). Non-fatal.
-    python3 "${hook_dir}/install_autostart.py" --project "${proj_root}" --port "${want_port}" \
-      >/dev/null 2>&1 || true
-    # Hand off to the shared digest + auto-open path below.
-    board_path="${board_dir}/board.json"
-    # Don't ALSO run the SessionStart recon this turn: the bootstrap fill is
-    # still streaming cards in the background, and its own end-of-fill
-    # reconcile_sweep already covers the freshly-mined history. A second
-    # concurrent recon would race the fill's card.py writes (lost-update on the
-    # full-replace POST) for no added signal. Resumed sessions still reconcile.
-    just_bootstrapped=1
-  fi
-  # #556 — mark onboarded ONLY after bootstrap actually produced a board.json.
-  # Writing the marker before this check (old order) stranded the user "onboarded
-  # but boardless" on a failed bootstrap: the picker never re-fired and every later
-  # session exited silently. No board.json → exit WITHOUT the marker, so the next
-  # session re-offers the picker.
-  if [ -f "${board_path}" ]; then
-    mkdir -p "${HOME}/.board-steward" 2>/dev/null
-    : > "${onboard_marker}"
-  else
-    exit 0
-  fi
+  # Any other folder that did not get a board (#960: excluded, never-listed,
+  # auto_create off/ask, deny-listed): stay silent. The old one-time in-project
+  # bootstrap that lived here is now the #960 automatic-board path above.
+  exit 0
 fi
 
 project_dir="$(dirname "$(dirname "${board_path}")")"

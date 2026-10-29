@@ -413,12 +413,14 @@ def create_notice(root: str, port: int, card_py: str, first: bool) -> str:
             f"Mention it to the user in one short line.")
 
 
-def ask_notice(root: str, bootstrap_sh: str, card_py: str) -> str:
+def ask_notice(root: str, create_sh: str, card_py: str) -> str:
+    """create_sh is autocreate_board.sh: a "yes" goes through the same
+    no-extra-tab path as an automatic creation."""
     name = Path(root).name
     return (
         f"WorkBoard: this folder ('{name}', {root}) has no board and automatic boards "
         f"are set to ask. Ask the user in ONE line: \"Create a WorkBoard for {name}? "
-        f"(yes / no / never for this folder)\". yes → run `bash \"{bootstrap_sh}\" "
+        f"(yes / no / never for this folder)\". yes → run `bash \"{create_sh}\" "
         f"\"{root}\"`; never → run `python3 {card_py} autocreate never \"{root}\"`; "
         f"no → do nothing."
     )
