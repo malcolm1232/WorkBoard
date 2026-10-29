@@ -474,6 +474,15 @@ def test_ui_markup():
           "view toggle has a Tokens button and a #tokens container")
     check("renderTokens()" in html and "apiBase + '/tokens?since='" in html,
           "render() drives renderTokens, which reads the active board's /tokens")
+    check("data-seg=\"' + name + '\"" in html and "seg('units', [['cost', '$'], ['tokens', 'Tokens']]" in html,
+          "a $ / Tokens units toggle")
+    check("function _tkByProject" in html and "_tkToggleProject" in html and "data-act=\"all\"" in html,
+          "per-project chart with project toggles and a show-all reset")
+    blk = html[html.index("// ===== #958 Tokens view"):html.index("// ===== View switcher (Board / Calendar / Tokens)")]
+    check("localStorage" in blk and blk.count("try {") >= 2,
+          "units and hidden projects are remembered per browser, storage access guarded")
+    check("data-tip=" not in blk and "[data-tip]" not in blk,
+          "the panel's tooltips use their own attribute (no second copy from the board tooltip)")
     check(html.count("calc(100% - var(--hdr-h, 48px))") == 3,
           "board, calendar and tokens views size from the live header height")
 

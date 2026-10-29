@@ -1877,7 +1877,7 @@
     padding: 14px 16px; box-shadow: var(--shadow); min-width: 0;
   }
   .tk-card.wide { grid-column: 1 / -1; }
-  .tk-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
+  .tk-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
   .tk-card h3 .tk-note { font-weight: 400; color: var(--muted); font-size: 12px; }
   /* Daily chart: value axis (0 / half / top gridline, labelled) on the left,
      bars on a shared baseline, a few date ticks below. Every bar has its date
@@ -1890,8 +1890,30 @@
   .tk-grid-line { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid rgba(44,38,32,.08); }
   .tk-grid-line.base { border-top-color: rgba(44,38,32,.22); }
   .tk-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; }
-  .tk-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
-  .tk-bar.on > i { filter: brightness(1.15); }
+  /* Bars stack bottom-up (column-reverse); a 1px surface-coloured line inside
+     each lower segment separates the fills without adding height. */
+  .tk-bar { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse;
+            justify-content: flex-start; align-items: stretch; cursor: pointer; }
+  .tk-bar > i { flex: 0 0 auto; box-sizing: border-box; }
+  .tk-bar > i:not(:last-child) { border-radius: 0; border-top: 1px solid var(--card-bg); }
+  .tk-bar.on > i { filter: brightness(1.12); }
+  .tk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+  .tk-chip {
+    display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; line-height: 1;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--card-border); background: var(--card-bg);
+    color: var(--ink); cursor: pointer; transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  }
+  .tk-chip:hover { border-color: var(--muted); }
+  .tk-chip .tk-chip-v { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tk-chip:not(.on):not(.static):not(.reset) { color: var(--muted); background: transparent; border-style: dashed; }
+  .tk-chip:not(.on):not(.static):not(.reset) .tk-sw { opacity: .3; }
+  .tk-chip.static { cursor: default; }
+  .tk-chip.reset { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .tk-table td.tk-cb, .tk-table th.tk-cb { width: 22px; padding-right: 6px; }
+  .tk-table td.tk-cb input { margin: 0; vertical-align: middle; cursor: pointer; accent-color: var(--ink); }
+  .tk-table tr.off td:not(.tk-cb) { opacity: .45; }
+  .tk-link { border: 0; background: none; padding: 0; margin-left: auto; font: inherit; font-size: 12px; font-weight: 500; color: var(--accent); cursor: pointer; }
+  .tk-link:hover { text-decoration: underline; }
   .tk-bar > i {
     display: block; width: 100%; background: var(--tk-1); border-radius: 4px 4px 0 0; min-height: 1px;
   }
@@ -5649,10 +5671,50 @@ function wireBoardTitle() {
 }
 
 // ===== #958 Tokens view =====
-// API-equivalent cost of the Claude Code sessions behind every board (GET /tokens).
-// Data is cached per (window, scope, project) and refetched at most once a minute,
+// API-equivalent cost and token counts of the Claude Code sessions behind every
+// board (GET /tokens). Data is cached per (window, scope, project, hidden
+// projects) and refetched at most once a minute,
 // so render() ticks from the board poll never rebuild the view or reset its scroll.
-const _tk = { win: 7, scope: 'all', project: null, projectLabel: null, cache: {}, loading: {} };
+const _tk = { win: 7, scope: 'all', project: null, projectLabel: null, cache: {}, loading: {},
+  units: 'cost', exclude: [], colors: {} };
+// Per-browser view choices: $ or tokens, projects switched off, project colours.
+const TK_STORE = { units: 'workboard.tokens.units', exclude: 'workboard.tokens.exclude', colors: 'workboard.tokens.colors' };
+(function _tkRestore() {
+  try {
+    const u = localStorage.getItem(TK_STORE.units);
+    if (u === 'cost' || u === 'tokens') _tk.units = u;
+    const ex = JSON.parse(localStorage.getItem(TK_STORE.exclude) || '[]');
+    if (Array.isArray(ex)) _tk.exclude = ex.filter(x => typeof x === 'string');
+    const co = JSON.parse(localStorage.getItem(TK_STORE.colors) || '{}');
+    if (co && typeof co === 'object') _tk.colors = co;
+  } catch (_) { /* private window / blocked storage: defaults */ }
+})();
+function _tkSave(key, val) {
+  try { localStorage.setItem(TK_STORE[key], typeof val === 'string' ? val : JSON.stringify(val)); } catch (_) {}
+}
+// Eight categorical slots (dataviz reference order, validated for adjacent
+// stacking) + a neutral for "Other". A project keeps its slot across windows
+// and toggles: colour follows the project, never its rank.
+const TK_SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+const TK_OTHER = '#b3aca4';
+function _tkSlots(keys) {
+  const used = new Set();
+  const out = {};
+  keys.forEach(k => {
+    const s = _tk.colors[k];
+    if (Number.isInteger(s) && s >= 0 && s < TK_SERIES.length && !used.has(s)) { out[k] = s; used.add(s); }
+  });
+  keys.forEach(k => {
+    if (k in out) return;
+    let s = 0;
+    while (used.has(s) && s < TK_SERIES.length - 1) s++;
+    out[k] = s; used.add(s);
+  });
+  let changed = false;
+  keys.forEach(k => { if (_tk.colors[k] !== out[k]) { _tk.colors[k] = out[k]; changed = true; } });
+  if (changed) _tkSave('colors', _tk.colors);
+  return out;
+}
 const TK_PARTS = [
   ['output', 'Output', '--tk-1'],
   ['cacheRead', 'Cache read', '--tk-2'],
@@ -5675,15 +5737,27 @@ function _tkTok(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-  return String(n);
+  return String(Math.round(n));
 }
+// The value a row shows in the current units: $ or "new" tokens (output +
+// uncached input + cache writes; cache reads are re-sent context and are
+// shown beside it, never summed in).
+function _tkIsTok() { return _tk.units === 'tokens'; }
+function _tkNum(row) { return _tkIsTok() ? ((row.tokens && row.tokens.new) || 0) : (row.cost || 0); }
+function _tkFmt(v) { return _tkIsTok() ? _tkTok(v) : _tkMoney(v); }
+function _tkTokTip(k) {
+  return _tkTok(k.new) + ' new tokens (output ' + _tkTok(k.output) + ', cache writes ' + _tkTok(k.cacheWrite) +
+    ', uncached input ' + _tkTok(k.uncachedInput) + ') + ' + _tkTok(k.cacheRead) + ' cache reads';
+}
+function _tkExcl() { return _tk.project ? [] : _tk.exclude; }
 function _tkKey(win) {
-  return [apiBase, win, _tk.scope, _tk.project || ''].join('|');
+  return [apiBase, win, _tk.scope, _tk.project || '', _tkExcl().slice().sort().join('\u0001')].join('|');
 }
 function _tkUrl(win) {
   let u = apiBase + '/tokens?since=' + win + 'd';
   if (_tk.project) u += '&project=' + encodeURIComponent(_tk.project);
   else if (_tk.scope === 'board') u += '&scope=board';
+  _tkExcl().forEach(k => { u += '&exclude=' + encodeURIComponent(k === '' ? '(none)' : k); });
   return u;
 }
 async function _tkLoad(win, force) {
@@ -5711,23 +5785,43 @@ function _tkSetControls(patch) {
   if (el) el.scrollTop = 0;
   renderTokens(true);
 }
+// Units and project toggles keep the page where it is (no scroll jump, no
+// "Loading" flash): the old numbers stay until the new ones arrive.
+function _tkSetUnits(u) {
+  _tk.units = u;
+  _tkSave('units', u);
+  renderTokens(true, true);
+}
+function _tkToggleProject(key, on) {
+  const ex = new Set(_tk.exclude);
+  if (on) ex.delete(key); else ex.add(key);
+  _tk.exclude = [...ex];
+  _tkSave('exclude', _tk.exclude);
+  renderTokens(true, true);
+}
+function _tkShowAll() {
+  _tk.exclude = [];
+  _tkSave('exclude', _tk.exclude);
+  renderTokens(true, true);
+}
 // Entry point from render(): a no-op rebuild unless the data changed.
-async function renderTokens(rebuild) {
+async function renderTokens(rebuild, soft) {
   const el = document.getElementById('tokens');
   if (!el) return;
   const win = _tk.win;
-  const sig = _tkKey(win);
-  if (!el.firstChild || rebuild) {
+  const sig = _tkKey(win) + '|' + _tk.units;
+  const keepTop = el.scrollTop;
+  if (!el.firstChild || (rebuild && !soft)) {
     el.innerHTML = '<div class="tk-inner">' + _tkTopbar(null) + '<div class="tk-empty">Loading token usage…</div></div>';
     _tkWire(el);
   }
   const [main, d7, d30] = await Promise.all([_tkLoad(win), _tkLoad(7), _tkLoad(30)]);
-  if (_tkKey(_tk.win) !== sig || _view !== 'tokens') return;   // controls moved on meanwhile
+  if (_tkKey(_tk.win) + '|' + _tk.units !== sig || _view !== 'tokens') return;   // controls moved on meanwhile
   const stamp = [main, d7, d30].map(x => (x && x.generatedAt) || '').join('|');
   if (!rebuild && el.dataset.stamp === stamp && el.dataset.sig === sig) return;
   el.dataset.stamp = stamp;
   el.dataset.sig = sig;
-  const top = el.scrollTop;
+  const top = soft ? keepTop : el.scrollTop;
   if (main && main.indexing) {
     el.innerHTML = '<div class="tk-inner">' + _tkTopbar(null) +
       '<div class="tk-empty">Indexing your Claude Code transcripts for the first time. This takes about half a minute; the view fills in by itself.</div></div>';
@@ -5743,6 +5837,7 @@ async function renderTokens(rebuild) {
   }
   el.innerHTML = '<div class="tk-inner">' + _tkTopbar(main) + _tkTiles(main, d7, d30) +
     '<div class="tk-grid">' +
+      _tkByProject(main) +
       _tkDaily(main) + _tkParts(main) +
       _tkProjects(main) + _tkCards(main) +
       _tkTurns(main) + _tkInsights(main) +
@@ -5753,24 +5848,42 @@ async function renderTokens(rebuild) {
   el.scrollTop = top;
 }
 function _tkTopbar(o) {
-  const seg = (name, items, cur) => '<span class="tk-seg" data-seg="' + name + '">' +
-    items.map(([v, l]) => '<button data-v="' + v + '" class="' + (String(cur) === String(v) ? 'active' : '') + '">' + l + '</button>').join('') + '</span>';
-  let h = '<div class="tk-topbar"><h2>Tokens</h2><span class="tk-basis">API-equivalent list price, not a bill' +
+  const seg = (name, items, cur, aria) => '<span class="tk-seg" data-seg="' + name + '" role="group" aria-label="' + aria + '">' +
+    items.map(([v, l]) => '<button data-v="' + v + '" aria-pressed="' + (String(cur) === String(v)) + '" class="' + (String(cur) === String(v) ? 'active' : '') + '">' + l + '</button>').join('') + '</span>';
+  let h = '<div class="tk-topbar"><h2>Tokens</h2><span class="tk-basis">' +
+    (_tkIsTok() ? 'Token counts' : 'API-equivalent list price, not a bill') +
     (o ? ' · ' + _tkEsc(o.from) + ' to ' + _tkEsc(o.to) : '') + '</span>' +
-    '<span class="tk-controls">' + seg('win', [[7, '7 days'], [30, '30 days']], _tk.win) +
-    (_tk.project ? '' : seg('scope', [['all', 'All projects'], ['board', 'This board']], _tk.scope)) +
+    '<span class="tk-controls">' + seg('units', [['cost', '$'], ['tokens', 'Tokens']], _tk.units, 'Units') +
+    seg('win', [[7, '7 days'], [30, '30 days']], _tk.win, 'Window') +
+    (_tk.project ? '' : seg('scope', [['all', 'All projects'], ['board', 'This board']], _tk.scope, 'Scope')) +
     '</span></div>';
   if (_tk.project) {
     h += '<div class="tk-crumb"><button data-act="up">‹ All projects</button><span>Project</span><strong>' +
       _tkEsc(_tk.projectLabel || _tk.project) + '</strong></div>';
+  } else if (o && _tk.exclude.length) {
+    const names = (o.byProject || []).filter(p => !p.included).map(p => p.label);
+    h += '<div class="tk-crumb"><span>Hiding ' + names.length + ' project' + (names.length === 1 ? '' : 's') +
+      ': <strong>' + _tkEsc(names.join(', ')) + '</strong></span><button data-act="all">Show all projects</button></div>';
   }
   return h;
 }
 function _tkTiles(o, d7, d30) {
   const t = o.totals;
   const tile = (k, v, s, tip) => '<div class="tk-tile"' + (tip ? ' title="' + _tkEsc(tip) + '"' : '') + '><div class="tk-k">' + k + '</div><div class="tk-v">' + v + '</div><div class="tk-s">' + s + '</div></div>';
-  const head = (d, n) => d && d.totals ? tile('Last ' + n + ' days', _tkMoney(d.totals.cost), _tkMoney(d.totals.cost / n) + ' per day · ' + d.totals.replies.toLocaleString('en-US') + ' replies') : tile('Last ' + n + ' days', '-', '');
   const est = t.estimated;
+  if (_tkIsTok()) {
+    const head = (d, n) => d && d.totals ? tile('Last ' + n + ' days · new tokens', _tkTok(d.totals.tokens.new),
+      '+ ' + _tkTok(d.totals.tokens.cacheRead) + ' cache reads · ' + _tkTok(d.totals.tokens.new / n) + ' new per day',
+      'New tokens = output + uncached input + cache writes. Cache reads re-send the same context on every reply, so they are shown apart.') : tile('Last ' + n + ' days', '-', '');
+    const kinds = o.byKind || [];
+    const agentNew = kinds.filter(k => ['sub-agent', 'workflow-agent', 'headless-child'].includes(k.key)).reduce((a, k) => a + k.tokens.new, 0);
+    return '<div class="tk-tiles">' + head(d7, 7) + head(d30, 30) +
+      tile('Output', _tkTok(t.tokens.output), _tkTok(t.tokens.outputThinking) + ' of it thinking') +
+      tile('Cache writes', _tkTok(t.tokens.cacheWrite5m + t.tokens.cacheWrite1h), _tkTok(t.tokens.cacheWrite1h) + ' with the 1 hour TTL') +
+      tile('Agents', _tkPct(t.tokens.new ? agentNew / t.tokens.new : 0), _tkTok(agentNew) + ' new tokens in sub-agents and workflows') +
+      '</div>';
+  }
+  const head = (d, n) => d && d.totals ? tile('Last ' + n + ' days', _tkMoney(d.totals.cost), _tkMoney(d.totals.cost / n) + ' per day · ' + d.totals.replies.toLocaleString('en-US') + ' replies') : tile('Last ' + n + ' days', '-', '');
   return '<div class="tk-tiles">' + head(d7, 7) + head(d30, 30) +
     tile('Cache hit rate', _tkPct(t.cacheHitRate, 1), _tkTok(t.tokens.cacheRead) + ' tokens re-read') +
     tile('Agents', _tkPct(o.mainVsAgents.agentShare), _tkMoney(o.mainVsAgents.agents) + ' in sub-agents and workflows') +
@@ -5785,34 +5898,72 @@ function _tkNiceMax(x) {
   for (const m of [1, 2, 2.5, 5, 10]) if (m * e >= x) return m * e;
   return 10 * e;
 }
-function _tkDaily(o) {
-  const days = o.byDay || [];
-  const peak = Math.max(0, ...days.map(d => d.cost));
+function _tkDay(iso) {
+  return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+// Shared bar chart: a labelled value axis (0 / half / top), bars on one
+// baseline, about four date ticks. cols[i] = [{v, color, tip}] stacked bottom
+// up; each segment has its own tooltip, and the bar's aria-label lists them.
+function _tkChart(dayIsos, cols) {
+  const peak = Math.max(0, ...cols.map(c => c.reduce((a, s) => a + s.v, 0)));
   const top = _tkNiceMax(peak);
-  const fmtDay = iso => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const bars = days.map(d => {
-    const lab = fmtDay(d.day) + ' · ' + _tkMoney(d.cost) + ' · ' + d.replies.toLocaleString('en-US') + ' replies';
-    return '<div class="tk-bar" role="img" aria-label="' + _tkEsc(lab) + '" data-tip="' + _tkEsc(lab) + '"><i style="height:' + (d.cost / top * 100).toFixed(2) + '%"></i></div>';
+  const bars = cols.map((segs, i) => {
+    const lab = segs.map(s => s.tip).join('; ');
+    const inner = segs.filter(s => s.v > 0).map(s =>
+      '<i style="height:' + (s.v / top * 100).toFixed(3) + '%;background:' + s.color + '" data-tktip="' + _tkEsc(s.tip) + '"></i>').join('');
+    return '<div class="tk-bar" role="img" aria-label="' + _tkEsc(lab || _tkDay(dayIsos[i])) + '" data-tktip="' + _tkEsc(segs.length === 1 ? segs[0].tip : _tkDay(dayIsos[i]) + ' · ' + _tkFmt(segs.reduce((a, s) => a + s.v, 0)) + ' in all') + '">' + inner + '</div>';
   }).join('');
   const ys = [top, top / 2, 0];
-  const yLab = v => v === 0 ? '$0' : _tkMoney(v).replace(/\.00$/, '');
+  const yLab = v => v === 0 ? (_tkIsTok() ? '0' : '$0') : _tkFmt(v).replace(/\.00$/, '').replace(/\.0([KMB])$/, '$1');
   const yaxis = '<div class="tk-yaxis">' + ys.map((v, i) => '<span style="top:' + (i * 50) + '%">' + yLab(v) + '</span>').join('') +
     '<span class="tk-ywidth">' + yLab(top) + '</span></div>';
   const grid = ys.map((v, i) => '<div class="tk-grid-line' + (v === 0 ? ' base' : '') + '" style="top:' + (i * 50) + '%"></div>').join('');
-  // Date ticks: first, last, and evenly spaced ones between (about 4 in all).
-  const n = days.length, ticks = new Set([0, n - 1]);
+  const n = dayIsos.length, ticks = new Set([0, n - 1]);
   const step = Math.max(1, Math.round((n - 1) / 3));
   for (let i = step; i < n - 1 - step / 2; i += step) ticks.add(i);
   const xaxis = '<div class="tk-xaxis">' + [...ticks].sort((a, b) => a - b).map(i =>
-    '<span class="' + (i === 0 ? 'first' : i === n - 1 ? 'last' : '') + '" style="left:' + (n > 1 ? (i + 0.5) / n * 100 : 50) + '%">' + _tkEsc(fmtDay(days[i].day)) + '</span>').join('') + '</div>';
-  return '<section class="tk-card"><h3>Daily cost <span class="tk-note">peak ' + _tkMoney(peak) + ' · hover or tap a bar</span></h3>' +
-    '<div class="tk-chart">' + yaxis + '<div class="tk-plot">' + grid + '<div class="tk-bars">' + bars + '</div></div>' + xaxis + '</div></section>';
+    '<span class="' + (i === 0 ? 'first' : i === n - 1 ? 'last' : '') + '" style="left:' + (n > 1 ? (i + 0.5) / n * 100 : 50) + '%">' + _tkEsc(_tkDay(dayIsos[i])) + '</span>').join('') + '</div>';
+  return { peak, html: '<div class="tk-chart">' + yaxis + '<div class="tk-plot">' + grid + '<div class="tk-bars">' + bars + '</div></div>' + xaxis + '</div>' };
+}
+function _tkDaily(o) {
+  const days = o.byDay || [];
+  const ch = _tkChart(days.map(d => d.day), days.map(d => [{
+    v: _tkNum(d), color: 'var(--tk-1)',
+    tip: _tkDay(d.day) + ' · ' + (_tkIsTok() ? _tkTokTip(d.tokens) : _tkMoney(d.cost) + ' · ' + d.replies.toLocaleString('en-US') + ' replies'),
+  }]));
+  return '<section class="tk-card"><h3>' + (_tkIsTok() ? 'Daily new tokens' : 'Daily cost') +
+    ' <span class="tk-note">peak ' + _tkFmt(ch.peak) + ' · hover or tap a bar</span></h3>' + ch.html + '</section>';
+}
+// Per-project chart: daily stacked bars, one colour per project, legend chips
+// that switch a project off and on (the whole page follows).
+function _tkByProject(o) {
+  if (_tk.project) return '';
+  const pd = o.byProjectDay;
+  if (!pd || !pd.series) return '';
+  const slots = _tkSlots(pd.series.map(s => s.key || ''));
+  const shown = pd.series.filter(s => s.included).map(s => ({ s, color: TK_SERIES[slots[s.key || '']] }));
+  if (pd.other) shown.push({ s: pd.other, color: TK_OTHER });
+  const cols = pd.days.map((d, i) => shown.map(({ s, color }) => ({
+    v: _tkNum(s.days[i]), color,
+    tip: _tkDay(d) + ' · ' + s.label + ' · ' + (_tkIsTok() ? _tkTokTip(s.days[i].tokens) : _tkMoney(s.days[i].cost)),
+  })));
+  const ch = _tkChart(pd.days, cols);
+  const sum = s => s.days.reduce((a, x) => a + _tkNum(x), 0);
+  const chips = pd.series.map(s => {
+    const k = s.key || '';
+    return '<button class="tk-chip' + (s.included ? ' on' : '') + '" data-pkey="' + _tkEsc(k) + '" aria-pressed="' + s.included + '" title="' + _tkEsc((s.included ? 'Hide ' : 'Show ') + s.label) + '">' +
+      '<span class="tk-sw" style="background:' + TK_SERIES[slots[k]] + '"></span>' + _tkEsc(s.label) + ' <span class="tk-chip-v">' + _tkFmt(sum(s)) + '</span></button>';
+  }).join('') + (pd.other ? '<span class="tk-chip static"><span class="tk-sw" style="background:' + TK_OTHER + '"></span>' + _tkEsc(pd.other.label) + ' <span class="tk-chip-v">' + _tkFmt(sum(pd.other)) + '</span></span>' : '') +
+    (_tk.exclude.length ? '<button class="tk-chip reset" data-act="all">Show all</button>' : '');
+  return '<section class="tk-card wide"><h3>' + (_tkIsTok() ? 'New tokens by project' : 'Cost by project') +
+    ' <span class="tk-note">per day · click a project to hide or show it everywhere on this page</span></h3>' +
+    '<div class="tk-chips">' + chips + '</div>' + ch.html + '</section>';
 }
 function _tkParts(o) {
   const c = o.totals.components, k = o.totals.tokens;
   const sum = TK_PARTS.reduce((a, p) => a + (c[p[0]] || 0), 0) || 1;
   const toks = { output: k.output, cacheRead: k.cacheRead, cacheWrite5m: k.cacheWrite5m, cacheWrite1h: k.cacheWrite1h, uncachedInput: k.uncachedInput };
-  const stack = TK_PARTS.filter(p => c[p[0]] > 0).map(p => '<i style="flex:' + c[p[0]] + ' 1 0;background:var(' + p[2] + ')" data-tip="' + _tkEsc(p[1] + ' · ' + _tkMoney(c[p[0]])) + '"></i>').join('');
+  const stack = TK_PARTS.filter(p => c[p[0]] > 0).map(p => '<i style="flex:' + c[p[0]] + ' 1 0;background:var(' + p[2] + ')" data-tktip="' + _tkEsc(p[1] + ' · ' + _tkMoney(c[p[0]])) + '"></i>').join('');
   const rows = TK_PARTS.map(p => '<span class="tk-sw" style="background:var(' + p[2] + ')"></span><span>' + p[1] + '</span><span class="num muted">' + _tkTok(toks[p[0]]) + '</span><span class="num">' + _tkMoney(c[p[0]]) + ' · ' + _tkPct(c[p[0]] / sum) + '</span>').join('');
   const out = '<div class="tk-foot" style="margin-top:10px">Output ' + _tkTok(k.output) + ' tokens: ' + _tkTok(k.outputVisible) + ' visible, ' + _tkTok(k.outputThinking) + ' thinking, ' + _tkTok(k.outputSplitUnknown) + ' not split by older transcripts.</div>';
   return '<section class="tk-card"><h3>Where the money goes <span class="tk-note">' + _tkMoney(o.totals.cost) + ' total</span></h3><div class="tk-stack">' + stack + '</div><div class="tk-legend">' + rows + '</div>' + out + '</section>';
@@ -5820,25 +5971,38 @@ function _tkParts(o) {
 function _tkConf(c) {
   const tot = (c.exact || 0) + (c.inferred || 0) + (c.unattributed || 0) || 1;
   const tip = 'exact ' + _tkPct(c.exact / tot) + ' · inferred ' + _tkPct(c.inferred / tot) + ' · unattributed ' + _tkPct(c.unattributed / tot);
-  return '<span class="tk-conf" data-tip="' + tip + '"><i class="exact" style="width:' + (c.exact / tot * 100) + '%"></i><i class="inferred" style="width:' + (c.inferred / tot * 100) + '%"></i></span>';
+  return '<span class="tk-conf" data-tktip="' + tip + '"><i class="exact" style="width:' + (c.exact / tot * 100) + '%"></i><i class="inferred" style="width:' + (c.inferred / tot * 100) + '%"></i></span>';
 }
 function _tkProjects(o) {
   if (_tk.project) return '';
-  const rows = (o.byProject || []).slice(0, 10).map(p => '<tr class="' + (p.key ? 'click' : '') + '" data-project="' + _tkEsc(p.key || '') + '" data-label="' + _tkEsc(p.label) + '">' +
-    '<td class="name" title="' + _tkEsc(p.key || 'No project could be inferred') + '">' + _tkEsc(p.label) + (p.folder ? '<span class="tk-tag">folder</span>' : '') + '</td>' +
-    '<td class="num">' + _tkMoney(p.cost) + '</td><td class="num tk-hide-sm">' + _tkPct(p.share) + '</td><td class="num">' + _tkConf(p.confidence) + '</td></tr>').join('');
+  const all = o.byProject || [];
+  const tot = all.reduce((a, p) => a + _tkNum(p), 0) || 1;
+  const rows = all.slice(0, 12).map(p => {
+    const k = p.key || '';
+    return '<tr class="click' + (p.included ? '' : ' off') + '" data-project="' + _tkEsc(k) + '" data-label="' + _tkEsc(p.label) + '">' +
+      '<td class="tk-cb"><input type="checkbox" data-pkey="' + _tkEsc(k) + '"' + (p.included ? ' checked' : '') + ' aria-label="' + _tkEsc((p.included ? 'Hide ' : 'Show ') + p.label) + '"></td>' +
+      '<td class="name" title="' + _tkEsc(p.key || 'No project could be inferred') + '">' + _tkEsc(p.label) + (p.folder ? '<span class="tk-tag">folder</span>' : '') + '</td>' +
+      '<td class="num">' + _tkFmt(_tkNum(p)) + '</td>' +
+      (_tkIsTok() ? '<td class="num tk-hide-sm">' + _tkTok(p.tokens.cacheRead) + '</td>' : '<td class="num tk-hide-sm">' + _tkPct(_tkNum(p) / tot) + '</td>') +
+      '<td class="num">' + _tkConf(p.confidence) + '</td></tr>';
+  }).join('');
   const cp = o.confidence.project;
-  return '<section class="tk-card"><h3>Projects <span class="tk-note">click a row to drill in</span></h3>' +
-    '<table class="tk-table"><thead><tr><th>Project</th><th class="num">Cost</th><th class="num tk-hide-sm">Share</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-    '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cp.exact.share) + ' (working folder, session board, parent session) · inferred ' + _tkPct(cp.inferred.share) + ' (files touched) · unattributed ' + _tkPct(cp.unattributed.share) + '</div></section>';
+  const reset = _tk.exclude.length ? ' <button class="tk-link" data-act="all">Show all</button>' : '';
+  return '<section class="tk-card"><h3>Projects <span class="tk-note">tick to include · click a name to drill in</span>' + reset + '</h3>' +
+    '<table class="tk-table"><thead><tr><th class="tk-cb"></th><th>Project</th><th class="num">' + (_tkIsTok() ? 'New tokens' : 'Cost') + '</th><th class="num tk-hide-sm">' + (_tkIsTok() ? 'Cache read' : 'Share') + '</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cp.exact.share) + ' (working folder, session board, parent session) · inferred ' + _tkPct(cp.inferred.share) + ' (files touched) · unattributed ' + _tkPct(cp.unattributed.share) + (_tk.exclude.length ? ' · of the projects shown' : '') + '</div></section>';
 }
 function _tkCards(o) {
-  const rows = (o.byCard || []).filter(c => c.key).slice(0, 10).map(c => '<tr><td class="name" title="' + _tkEsc(c.label + ' ' + (c.title || '')) + '">' +
+  const cards = (o.byCard || []).filter(c => c.key);
+  const tot = (o.byCard || []).reduce((a, c) => a + _tkNum(c), 0) || 1;
+  const rows = cards.slice(0, 10).map(c => '<tr><td class="name" title="' + _tkEsc(c.label + ' ' + (c.title || '')) + '">' +
     '<span class="sub">' + _tkEsc(c.project || '') + ' #' + _tkEsc(c.num) + '</span> ' + _tkEsc(c.title || '') + '</td>' +
-    '<td class="num">' + _tkMoney(c.cost) + '</td><td class="num tk-hide-sm">' + _tkPct(c.share) + '</td><td class="num">' + _tkConf(c.confidence) + '</td></tr>').join('');
+    '<td class="num">' + _tkFmt(_tkNum(c)) + '</td>' +
+    (_tkIsTok() ? '<td class="num tk-hide-sm">' + _tkTok(c.tokens.cacheRead) + '</td>' : '<td class="num tk-hide-sm">' + _tkPct(_tkNum(c) / tot) + '</td>') +
+    '<td class="num">' + _tkConf(c.confidence) + '</td></tr>').join('');
   const cc = o.confidence.card;
   return '<section class="tk-card"><h3>Cards</h3>' +
-    (rows ? '<table class="tk-table"><thead><tr><th>Card</th><th class="num">Cost</th><th class="num tk-hide-sm">Share</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="tk-foot">No card activity in this window.</div>') +
+    (rows ? '<table class="tk-table"><thead><tr><th>Card</th><th class="num">' + (_tkIsTok() ? 'New tokens' : 'Cost') + '</th><th class="num tk-hide-sm">' + (_tkIsTok() ? 'Cache read' : 'Share') + '</th><th class="num">Confidence</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="tk-foot">No card activity in this window.</div>') +
     '<div class="tk-foot" style="margin-top:8px">Exact ' + _tkPct(cc.exact.share) + ' (card event log) · inferred ' + _tkPct(cc.inferred.share) + ' (card.py calls in transcripts) · no card ' + _tkPct(cc.unattributed.share) + '</div></section>';
 }
 function _tkTurns(o) {
@@ -5880,6 +6044,7 @@ function _tkFoot(o) {
   let s = 'Prices as of ' + _tkEsc(o.pricesAsOf) + '. Cache writes cost 1.25x input (5 min TTL) or 2x (1 hour TTL); fast mode 2x. ' +
     'Days follow this computer\'s time zone. Index updated ' + (o.lastScan ? _tkEsc(new Date(o.lastScan).toLocaleTimeString()) : 'never') + '.';
   if (t.unpricedReplies) s += ' ' + t.unpricedReplies.toLocaleString('en-US') + ' replies use a model with no known price and count in tokens only.';
+  if (_tkIsTok()) s = 'New tokens = output + uncached input + cache writes; cache reads (the same context re-sent on every reply) are counted apart. Turns, cache breaks, context bloat and sessions stay in $. ' + s;
   return '<div class="tk-foot">' + s + '</div>';
 }
 function _tkWire(el) {
@@ -5887,24 +6052,40 @@ function _tkWire(el) {
     seg.querySelectorAll('button').forEach(b => {
       b.onclick = () => {
         if (seg.dataset.seg === 'win') _tkSetControls({ win: Number(b.dataset.v) });
+        else if (seg.dataset.seg === 'units') _tkSetUnits(b.dataset.v);
         else _tkSetControls({ scope: b.dataset.v });
       };
     });
   });
   const up = el.querySelector('[data-act="up"]');
   if (up) up.onclick = () => _tkSetControls({ project: null, projectLabel: null });
+  el.querySelectorAll('[data-act="all"]').forEach(b => { b.onclick = _tkShowAll; });
+  el.querySelectorAll('button.tk-chip[data-pkey]').forEach(b => {
+    b.onclick = () => _tkToggleProject(b.dataset.pkey, b.getAttribute('aria-pressed') !== 'true');
+  });
+  el.querySelectorAll('input[type=checkbox][data-pkey]').forEach(cb => {
+    cb.onclick = e => e.stopPropagation();   // ticking never drills in
+    cb.onchange = () => _tkToggleProject(cb.dataset.pkey, cb.checked);
+  });
   el.querySelectorAll('tr.click[data-project]').forEach(tr => {
-    tr.onclick = () => _tkSetControls({ project: tr.dataset.project, projectLabel: tr.dataset.label });
+    tr.onclick = e => {
+      if (e.target.closest('.tk-cb')) return;
+      if (!tr.dataset.project) return;   // the unattributed bucket has nothing to drill into
+      _tkSetControls({ project: tr.dataset.project, projectLabel: tr.dataset.label });
+    };
   });
   const tip = el.querySelector('#tk-tip');
   if (!tip) return;
-  // Hover (mouse) and tap (touch) both show the tooltip and mark the bar.
+  // Hover (mouse) and tap (touch) both show the tooltip and mark the bar. The
+  // attribute is data-tktip, not data-tip: the board's global tooltip reads data-tip
+  // and would draw a second copy.
   let tipTimer = null;
   const show = (t, cx, cy) => {
     el.querySelectorAll('.tk-bar.on').forEach(b => b.classList.remove('on'));
     if (!t) { tip.style.display = 'none'; return; }
-    if (t.classList.contains('tk-bar')) t.classList.add('on');
-    tip.textContent = t.dataset.tip;
+    const bar = t.closest('.tk-bar');
+    if (bar) bar.classList.add('on');
+    tip.textContent = t.dataset.tktip;
     tip.style.display = 'block';
     const w = tip.offsetWidth, h = tip.offsetHeight;
     let x = cx + 12, y = cy - h - 10;
@@ -5914,10 +6095,10 @@ function _tkWire(el) {
     tip.style.left = x + 'px';
     tip.style.top = y + 'px';
   };
-  el.onmousemove = e => show(e.target.closest('[data-tip]'), e.clientX, e.clientY);
+  el.onmousemove = e => show(e.target.closest('[data-tktip]'), e.clientX, e.clientY);
   el.onmouseleave = () => show(null);
   el.onclick = e => {   // property, not addEventListener: _tkWire runs on every rebuild
-    const t = e.target.closest('[data-tip]');
+    const t = e.target.closest('[data-tktip]');
     if (!t) return;
     const r = t.getBoundingClientRect();
     show(t, r.left + r.width / 2, r.top);
