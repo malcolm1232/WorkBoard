@@ -242,6 +242,15 @@
   }
   header .seg-pill .seg:hover { background: rgba(217,119,87,.14); }
   header .seg-pill .seg-div { align-self: stretch; width: 1px; background: var(--card-border); }
+  /* #961 - Add column is a compact "+" segment (tooltip + aria-label carry the
+     name). A full "+ Add column" label widened the right cluster enough to push
+     the title out of its centered slot at 1366-1440px. Below 1100px the header
+     is tight (tabs + chip + title + controls), so the three segments also trim
+     their side padding rather than squeeze the switcher into clipping its chip. */
+  header #add-col-btn { font-size: 15px; font-weight: 600; line-height: 1; }
+  @media (max-width: 1100px) {
+    header .seg-pill .seg { padding-left: 9px; padding-right: 9px; }
+  }
   /* #841/#848/#improve — project switcher as a polished SEGMENTED CONTROL,
      matching the header's view-toggle convention (one inset track; active = ink
      pill with a soft lift; inactive = quiet muted text that warms on hover).
@@ -1184,7 +1193,7 @@
      first row, title + Tags + view toggle the second. The views below size
      from --hdr-h (measured by a ResizeObserver), so nothing is pushed off
      screen. The column-layout tools (Reset Columns / Sort Time) are desktop
-     board-arranging affordances and are dropped here. */
+     board-arranging affordances and are dropped at 600px and below. */
   @media (max-width: 860px) {
     header { height: auto; min-height: 48px; flex-wrap: wrap; row-gap: 6px; padding: 6px 14px; }
     header #project-tabs { flex: 1 1 100%; margin-right: 0; }
@@ -1196,7 +1205,10 @@
   }
   @media (max-width: 600px) {
     header { gap: 8px; padding: 6px 10px; }
-    header #cols-pill { display: none !important; }
+    /* Reset Columns / Sort Time are desktop arranging tools; Add column (#961)
+       stays so a phone can still add a column. */
+    header #cols-pill #reset-cols-btn, header #cols-pill #sort-time-btn,
+    header #cols-pill .seg-div { display: none; }
     header h1 { font-size: 16px; padding: 3px 4px; }
     header #tags-btn { padding: 5px 8px; }
     .view-toggle { margin-right: 0; }
@@ -1796,14 +1808,6 @@
   .setup .small { font-size: 12px; color: var(--muted); }
   .setup code { background: var(--neutral); color: var(--ink); padding: 1px 6px; border-radius: 3px; }
 
-  .col-add-btn {
-    background: var(--card-bg); color: var(--ink);
-    border: 1px dashed var(--card-border);
-    padding: 8px 12px; border-radius: 8px; cursor: pointer;
-    height: 36px; flex-shrink: 0; align-self: flex-start; font-size: 13px;
-    white-space: nowrap;
-  }
-  .col-add-btn:hover { background: rgba(217,119,87,.06); border-style: solid; border-color: var(--accent); color: var(--accent); }
 
   /* ===== #318 BOARD-LOAD HUD — History Replay inline/haiku extraction progress.
      Terminal-cyberpunk readout, consistent with the #119 drag HUD (green-on-black,
@@ -2119,6 +2123,8 @@
     <button id="reset-cols-btn" class="seg" title="Restore default layout: Task+Notes · Backlog+Ideas · 🚨 Super-Urgent+Discarded · In Progress · Done (with stacks), then extras by recency. Also snaps the zoom back to the 92% fit-to-screen view and the Logs + recon HUDs back to their default positions.">↺ Reset Columns</button>
     <span class="seg-div"></span>
     <button id="sort-time-btn" class="seg" title="Sort the cards inside every column by time (newest first). Column positions don't change — this just re-orders cards within each column, undoing any manual drag-reorder.">⇅ Sort Time</button>
+    <span class="seg-div"></span>
+    <button id="add-col-btn" class="seg" title="Add column" aria-label="Add column">+</button>
   </span>
   <button id="tags-btn" class="header-pill" style="display:none" title="Show all tags used on this board">🏷 Tags <span id="tags-count">0</span></button>
   <span class="view-toggle" id="view-toggle" style="display:none">
@@ -4984,6 +4990,8 @@ function enterApp() {
   if (resetBtn) resetBtn.onclick = resetColumnsToDefault;
   const sortTimeBtn = $('#sort-time-btn');
   if (sortTimeBtn) sortTimeBtn.onclick = sortCardsByTimeNow;   // #477
+  const addColBtn = $('#add-col-btn');
+  if (addColBtn) addColBtn.onclick = addColumn;          // #961
   // #177 — Logs HUD is always on. Minimizable to header-only via the
   // ▾/▸ button inside the HUD. No top-bar pill (keeps the header clean).
   _logsHud();
@@ -6760,6 +6768,28 @@ function _restoreScroll(m) {
     if (body && m[col.dataset.col] != null) body.scrollTop = m[col.dataset.col];
   });
 }
+// #961 - Add column is a "+" segment in the header's column-tools pill, not a
+// button at the end of the #board row. As the row's last flex item it added its own width
+// plus a gap to #board's scroll extent, so a board whose columns exactly fit
+// the window (the default 5-wide board at 1440px) still scrolled sideways just
+// to reveal the button. In the header it is always in reach and #board only
+// scrolls when the columns themselves overflow.
+async function addColumn() {
+  if (!state) return;
+  const name = await miniPrompt({
+    title: 'Add column',
+    label: 'Column name',
+    placeholder: 'e.g. In Review',
+    okText: 'Add',
+  });
+  if (!name) return;
+  pushUndo();
+  state.columns.push({ id: uid('col'), name, kind: 'custom' });
+  scheduleSave(); render();
+  // Bring the new column (always last) into view.
+  const b = $('#board');
+  if (b) b.scrollLeft = b.scrollWidth;
+}
 function render() {
   if (!state) return;
   ensureDiscardColumnIfNeeded();   // #650 — materialize Discarded col so discarded cards render on load
@@ -6787,22 +6817,6 @@ function render() {
       }
       return renderColumn(col, cards);
     });
-    const addCol = document.createElement('button');
-    addCol.className = 'col-add-btn';
-    addCol.textContent = '+ Add column';
-    addCol.onclick = async () => {
-      const name = await miniPrompt({
-        title: 'Add column',
-        label: 'Column name',
-        placeholder: 'e.g. In Review',
-        okText: 'Add',
-      });
-      if (!name) return;
-      pushUndo();
-      state.columns.push({ id: uid('col'), name, kind: 'custom' });
-      scheduleSave(); render();
-    };
-    board.appendChild(addCol);
     // #856 - board.innerHTML was just wiped above; re-attach the virtual
     // inbox column (a detached DOM node, never part of state.columns).
     renderInboxColumn();
