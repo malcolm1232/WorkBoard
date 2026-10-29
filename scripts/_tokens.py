@@ -688,7 +688,7 @@ class _FileScan:
                 if not num:
                     continue
                 bm = BOARD_ARG.search(cmd)
-                board = (bm.group(1) + "/board") if bm and bm.group(1).startswith("/") else None
+                board = bm.group(1) if bm and bm.group(1).startswith("/") else None
                 if board is None:
                     for rt in self.roots:
                         if rt + "/" in cmd:
