@@ -20,9 +20,10 @@ board-steward has **two halves**, kept distinct:
 
 - `SKILL.md` — the playbook Claude follows (greet → traverse → act → log → sign off)
 - `scripts/` — Python helpers (stdlib-only, no dependencies)
-  - `serve.py` — local HTTP server with SSE live-streaming (no File System Access API; cross-browser). Serves `/board.json`, `/events`, `/metrics`, `/export.md`, `/export.html`, `/flash`, `/health`.
-  - `card.py` — the CLI. Mutations (`add` / `move` / `fly` / `update` / `link` / `subtask` / `column` / `bug` / `improve` / `auto-ship`), reads (`digest` / `query` / `show` / `list` / `wiki` / `export` / `metrics`), and data-safety (`recover` / `migrate` / `repair-links`).
+  - `serve.py` — local HTTP server with SSE live-streaming (no File System Access API; cross-browser). Serves `/board.json`, `/events`, `/metrics`, `/tokens`, `/export.md`, `/export.html`, `/flash`, `/health`.
+  - `card.py` — the CLI. Mutations (`add` / `move` / `fly` / `update` / `link` / `subtask` / `column` / `bug` / `improve` / `auto-ship`), reads (`digest` / `query` / `show` / `list` / `wiki` / `export` / `metrics` / `tokens`), and data-safety (`recover` / `migrate` / `repair-links`).
   - `_boardio.py` · `_render.py` · `_metrics.py` — shared internals (write-safety, HTML/MD renderers, velocity compute) imported by both `card.py` and `serve.py`.
+  - `_tokens.py` · `_tokens_report.py` - token + API-equivalent cost tracking (#958): an incremental SQLite index of every Claude Code transcript under `~/.board-steward/tokens/`, attributed to project, session, turn and card (each number labelled exact / inferred / unattributed); `card.py tokens`, `GET /tokens` and the board's Tokens view read it.
   - `regen_index.py` — produces a small `index.json` digest for cheap Tier-1 reads
   - `archive_done.py` — sweeps Done cards older than 14d into monthly archives
   - `discover.py` / `discover2.py` / `hourly_extractor.py` — the **History Replay**: mine `~/.claude/projects/*/*.jsonl` and fly cards onto a fresh board so a new user opens the board and already sees their last week of work, animated in card-by-card

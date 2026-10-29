@@ -6,7 +6,7 @@ workflow-agent files included) into an incremental SQLite index under
 tree, a turn and a card. Reporting lives in _tokens_report.py; this module only
 collects, prices and attributes. stdlib-only.
 
-Design notes (the full measured spec is docs/TOKEN_TRACKING_SPEC.md):
+Design notes:
 - One row per unique API reply (message.id). A reply is written as one line per
   content block, all carrying identical usage, so lines are never summed.
 - Files are read from a saved byte offset up to the last complete newline; a
