@@ -1435,7 +1435,7 @@ def cmd_prelaunch_check(args, d, board):
                 code = c.get("code") or c.get("id")
                 print(f"  [{col}] #{c['num']:>3} [{p}] {code:<18} {c.get('title','')[:60]}")
             print()
-            print(f"Run `card.py show <num>` for detail, or `card.py fly <num> done` to ship.")
+            print("Run `card.py show <num>` for detail, or `card.py fly <num> done` to ship.")
     sys.exit(0 if not open_cards else 9)
 
 
@@ -1661,13 +1661,14 @@ def cmd_tokens(args):
             b = Path(args.board_filter).expanduser().resolve()
             project = str(b.parent.parent if b.name == "board.json" else b.parent
                           if b.name == "board" else b)
-        o = _tokens_report.compute(ix.con, since_days=days, project=project)
+        exclude = ["" if e == "(none)" else e for e in (args.exclude or [])]
+        o = _tokens_report.compute(ix.con, since_days=days, project=project, exclude=exclude)
     finally:
         ix.close()
     if args.json:
         print(json.dumps(o, ensure_ascii=False, indent=2))
     else:
-        print(_tokens_report.to_text(o, by=args.by))
+        print(_tokens_report.to_text(o, by=args.by, units=args.units))
 
 
 def cmd_export(args, d, board):

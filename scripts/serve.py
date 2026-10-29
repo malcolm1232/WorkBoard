@@ -719,7 +719,9 @@ class BoardHandler(BaseHTTPRequestHandler):
     def _handle_tokens(self):
         """GET /tokens - #958 token + API-equivalent cost JSON (same dict as
         `card.py tokens --json`). ?since=Nd window (default 7); ?scope=board
-        narrows to this board's project, ?project=<root path> to any project. The index is refreshed by the
+        narrows to this board's project, ?project=<root path> to any project;
+        each ?exclude=<root path> (or "(none)" for unattributed) switches a
+        project off for every number in the report except the Projects list. The index is refreshed by the
         background scanner, never inside the request; before its first scan
         completes this answers {"indexing": true}."""
         qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -728,6 +730,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         project = (qs.get("project") or [""])[0] or None   # drill-down: one project root
         if (qs.get("scope") or [""])[0] == "board":
             project = str(Path(self.board_dir).resolve().parent)
+        exclude = ["" if e == "(none)" else e for e in qs.get("exclude", [])]
         _kick_token_scan()
         try:
             con = _tokens.connect()
@@ -735,7 +738,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 if con.execute("SELECT value FROM meta WHERE key='last_scan'").fetchone() is None:
                     self._send(200, json.dumps({"indexing": True}).encode())
                     return
-                out = _tokens_report.compute(con, since_days=since_days, project=project)
+                out = _tokens_report.compute(con, since_days=since_days, project=project,
+                                             exclude=exclude)
             finally:
                 con.close()
         except Exception as e:

@@ -357,8 +357,15 @@ def build_parser():
                               "card, model, day, tool or turn kind. --json for the raw dict.")
     ptk.add_argument("--since", default="7d", help="window: N or Nd days (default 7d)")
     ptk.add_argument("--by", default="summary", choices=[
-        "summary", "project", "session", "card", "model", "kind", "day", "tool",
-        "turn-kind", "turn", "breaks"], help="breakdown to print (default summary)")
+        "summary", "project", "project-day", "session", "card", "model", "kind", "day",
+        "tool", "turn-kind", "turn", "breaks"], help="breakdown to print (default summary)")
+    ptk.add_argument("--units", default="cost", choices=["cost", "tokens"],
+                     help="project/card/day/project-day tables in $ (default) or in tokens "
+                          "(new tokens = output + uncached input + cache writes; cache reads "
+                          "shown apart)")
+    ptk.add_argument("--exclude", action="append", default=None, metavar="PROJECT",
+                     help="leave a project root out of every number (repeatable; "
+                          "'(none)' = unattributed)")
     ptk.add_argument("--project", default=None, help="narrow to one project root path")
     ptk.add_argument("--json", action="store_true", help="emit the full report dict")
     ptk.add_argument("--reindex", action="store_true",

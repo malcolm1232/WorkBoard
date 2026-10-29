@@ -378,6 +378,51 @@ def test_card_board_resolution():
           "an index from an older version rebuilds itself on the next refresh, totals unchanged")
 
 
+def test_project_toggles():
+    print("project toggles, token units, per-project days")
+    con = _tokens.connect()
+    full = _tokens_report.compute(con, since_days=3650)
+    alpha = str(BOARDP)
+    off = _tokens_report.compute(con, since_days=3650, exclude=[alpha])
+    none_off = _tokens_report.compute(con, since_days=3650, exclude=[""])
+    con.close()
+    a_cost = next(p["cost"] for p in full["byProject"] if p["key"] == alpha)
+    check(near(off["totals"]["cost"], full["totals"]["cost"] - a_cost, 0.02),
+          "excluding a project removes exactly its cost from the totals")
+    rows = {p["key"]: p for p in off["byProject"]}
+    check(alpha in rows and rows[alpha]["included"] is False
+          and all(p["included"] for k, p in rows.items() if k != alpha),
+          "the Projects list keeps the excluded project, flagged off, so it can be turned back on")
+    check(all(not (c["board"] or "").startswith(alpha + "/") for c in off["byCard"] if c["key"]),
+          "an excluded project's cards leave the Cards table")
+    check(off["exclude"] == [alpha], "the report echoes what it excluded")
+    check(none_off["totals"]["cost"] < full["totals"]["cost"]
+          and not any(p["included"] for p in none_off["byProject"] if p["key"] is None),
+          "the unattributed bucket can be switched off too")
+    pd = full["byProjectDay"]
+    check(len(pd["days"]) == 3650 and all(len(x["days"]) == 3650 for x in pd["series"]),
+          "per-project series: one point per day of the window")
+    tot = sum(x["cost"] for s_ in pd["series"] for x in s_["days"]) \
+        + (sum(x["cost"] for x in pd["other"]["days"]) if pd["other"] else 0)
+    check(near(tot, full["totals"]["cost"], 0.05), "per-project days add up to the total")
+    ser = {x["key"]: x for x in _tokens_report.compute(_tokens.connect(), since_days=3650,
+                                                       exclude=[alpha])["byProjectDay"]["series"]}
+    check(ser[alpha]["included"] is False, "a switched-off project keeps its series slot, flagged off")
+    k = full["totals"]["tokens"]
+    check(k["new"] == k["output"] + k["uncachedInput"] + k["cacheWrite5m"] + k["cacheWrite1h"],
+          "new tokens = output + uncached input + cache writes (cache reads apart)")
+    pk = rows[alpha]["tokens"] if alpha in rows else None
+    check(pk and pk["new"] == pk["output"] + pk["cacheWrite"] + pk["uncachedInput"] and pk["cacheRead"] > 0,
+          "every row carries its token split")
+    import subprocess
+    p = subprocess.run([sys.executable, str(REPO / "scripts" / "card.py"), "tokens", "--no-refresh",
+                        "--since", "3650", "--by", "project-day", "--units", "tokens",
+                        "--exclude", alpha], capture_output=True, text=True, timeout=60)
+    check(p.returncode == 0 and "Alpha" not in p.stdout.split("tokens     :")[-1].splitlines()[1]
+          and "excluded   : Alpha" in p.stdout,
+          "card.py tokens --by project-day --units tokens --exclude prints the per-day table")
+
+
 def test_endpoint():
     print("GET /tokens")
     os.environ["BOARD_TOKENS_DISABLE"] = "1"   # no background scan thread here
@@ -402,6 +447,11 @@ def test_endpoint():
     st, one = get("/tokens?since=3650&scope=board")
     check(st == 200 and one["project"] == str(BOARDP) and one["totals"]["cost"] < all_["totals"]["cost"],
           "scope=board narrows to this board's project")
+    import urllib.parse
+    st, ex = get("/tokens?since=3650&exclude=" + urllib.parse.quote(str(BOARDP)) + "&exclude=(none)")
+    check(st == 200 and ex["exclude"] == ["", str(BOARDP)]
+          and ex["totals"]["cost"] < all_["totals"]["cost"],
+          "?exclude= (repeatable, '(none)' = unattributed) switches projects off")
     st, bad = get("/tokens?since=abc")
     check(st == 200 and bad["sinceDays"] == 7, "a bad ?since falls back to 7 days")
 
@@ -434,6 +484,7 @@ def main():
     test_incremental(before)
     test_card_events()
     test_card_board_resolution()
+    test_project_toggles()
     test_endpoint()
     test_cli_empty_index()
     test_ui_markup()

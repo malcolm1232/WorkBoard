@@ -88,6 +88,7 @@ def _shape_totals(t: dict) -> dict:
                        "cacheWrite1h": _r(t["c_w1"]), "webSearch": _r(t["c_web"])},
         "tokens": {"uncachedInput": t["inp"], "cacheRead": t["cr"], "cacheWrite5m": t["w5"],
                    "cacheWrite1h": t["w1"], "fresh": t["inp"] + t["w5"] + t["w1"],
+                   "new": t["inp"] + t["w5"] + t["w1"] + t["out"],
                    "output": t["out"], "outputRecorded": t["out_raw"],
                    "outputThinking": t["think"], "outputVisible": max(0, visible_known),
                    "outputSplitUnknown": t["out"] - t["out_think_known"],
@@ -111,15 +112,41 @@ def _pct(xs, q):
     return xs[min(len(xs) - 1, int(len(xs) * q))]
 
 
-def compute(con, since_days: int = 7, project: str | None = None) -> dict:
+class Filter:
+    """Which projects a report covers: one project (the drill-down) and/or a
+    set of excluded ones (the view's project toggles). The unattributed bucket
+    is excluded with the key "" (NULL in the index)."""
+
+    def __init__(self, project: str | None = None, exclude=None):
+        self.project = project
+        self.exclude = sorted({e or "" for e in (exclude or [])})
+
+    def sql(self, col: str):
+        parts, args = [], []
+        if self.project:
+            parts.append(f"{col} = ?")
+            args.append(self.project)
+        if self.exclude:
+            parts.append(f"COALESCE({col}, '') NOT IN ({','.join('?' * len(self.exclude))})")
+            args += self.exclude
+        return ("".join(" AND " + x for x in parts), args)
+
+    def keeps(self, key: str | None) -> bool:
+        return (not self.project or key == self.project) and (key or "") not in self.exclude
+
+
+def compute(con, since_days: int = 7, project: str | None = None, exclude=None) -> dict:
     start, end = _window(since_days)
     folders = _tokens.FolderKeys()
     titles = _tokens.BoardCards()
     _LABELS.clear()
-    pf = " AND project = ?" if project else ""
-    pa = [project] if project else []
-    daily = [dict(r) for r in con.execute(
+    flt = Filter(project, exclude)
+    # Every project in the window (the Projects table must list excluded ones
+    # too, so they can be switched back on), then the rows the view covers.
+    pf, pa = Filter(project).sql("project")
+    daily_all = [dict(r) for r in con.execute(
         f"SELECT * FROM daily WHERE day >= ? AND day <= ?{pf}", [start, end] + pa)]
+    daily = [r for r in daily_all if flt.keeps(r["project"])]
     tot = _totals(daily)
     out: dict = {
         "sinceDays": since_days, "from": start, "to": end,
@@ -127,6 +154,7 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
         "project": project, "projectLabel": project_label(project, folders) if project else None,
         "pricesAsOf": _tokens.PRICES_AS_OF, "basis": "API-equivalent list price, not a bill",
         "lastScan": _last_scan(con),
+        "exclude": flt.exclude,
         "totals": _shape_totals(tot),
     }
     cost = tot["cost"] or 0.0
@@ -147,12 +175,14 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
         "projectRules": {k: _r(v) for k, v in sorted(rules.items(), key=lambda kv: -kv[1])},
     }
 
-    def rollup(keyf, extra=None, limit=None):
+    def rollup(keyf, extra=None, limit=None, rows=None, total=None):
+        rows = daily if rows is None else rows
+        total = cost if total is None else total
         res = []
-        for k, rs in _group(daily, keyf).items():
+        for k, rs in _group(rows, keyf).items():
             t = _totals(rs)
-            row = {"key": k, "cost": _r(t["cost"]), "replies": t["n"],
-                   "share": _r(t["cost"] / cost, 4) if cost else 0,
+            row = {"key": k, "cost": _r(t["cost"]), "replies": t["n"], "tokens": _token_split(t),
+                   "share": _r(t["cost"] / total, 4) if total else 0,
                    "estimatedCost": _r(t["cost_est"]),
                    "cacheHitRate": _r(t["cr"] / max(1, t["inp"] + t["cr"] + t["w5"] + t["w1"]), 4)}
             if extra:
@@ -180,7 +210,8 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
     for i in range(since_days):
         k = (d0 + datetime.timedelta(days=i)).isoformat()
         x = days.get(k)
-        dd.append({"day": k, "cost": x["cost"] if x else 0.0, "replies": x["replies"] if x else 0})
+        dd.append({"day": k, "cost": x["cost"] if x else 0.0, "replies": x["replies"] if x else 0,
+                   "tokens": x["tokens"] if x else _token_split(None)})
     out["byDay"] = dd
 
     def proj_extra(k, rs, t):
@@ -190,7 +221,11 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
                 "folder": rule == "paths-folder",
                 "isBoard": bool(k) and os.path.exists(os.path.join(k, "board", "board.json")),
                 "confidence": conf_split(rs, "project_rule", PROJECT_CONFIDENCE)}
-    out["byProject"] = rollup(lambda r: r["project"], proj_extra)
+    all_cost = sum(r["cost"] or 0 for r in daily_all)
+    out["byProject"] = rollup(lambda r: r["project"], proj_extra, rows=daily_all, total=all_cost)
+    for p_ in out["byProject"]:
+        p_["included"] = flt.keeps(p_["key"])
+    out["byProjectDay"] = _project_days(daily_all, flt, [d["day"] for d in dd], folders)
 
     def card_extra(k, rs, t):
         conf = conf_split(rs, "card_rule", CARD_CONFIDENCE)
@@ -203,14 +238,57 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
                 "title": titles.title(board, num), "confidence": conf}
     out["byCard"] = rollup(lambda r: r["card"], card_extra)
 
-    out.update(_turns(con, start, end, project))
-    out["cacheBreaks"] = _breaks(con, start, end, project)
-    out["contextRent"] = _rent(con, start, end, project)
-    out["sessions"] = _sessions(con, start, end, project, folders)
-    out["baseContext"] = _base_context(con, start, end, project)
-    out["compactions"] = _compactions(con, start, end, project)
+    out.update(_turns(con, start, end, flt))
+    out["cacheBreaks"] = _breaks(con, start, end, flt)
+    out["contextRent"] = _rent(con, start, end, flt)
+    out["sessions"] = _sessions(con, start, end, flt, folders)
+    out["baseContext"] = _base_context(con, start, end, flt)
+    out["compactions"] = _compactions(con, start, end, flt)
     out["insights"] = _insights(out)
     return out
+
+
+def _token_split(t) -> dict:
+    """Token counts of a group, split the way the view shows them. "new" is
+    everything except cache reads (output + uncached input + cache writes):
+    cache reads re-send the same context every reply and dwarf the rest."""
+    if not t:
+        return {"new": 0, "output": 0, "cacheWrite": 0, "uncachedInput": 0, "cacheRead": 0}
+    w = t["w5"] + t["w1"]
+    return {"new": t["out"] + t["inp"] + w, "output": t["out"], "cacheWrite": w,
+            "uncachedInput": t["inp"], "cacheRead": t["cr"]}
+
+
+PROJECT_SERIES = 8
+
+
+def _project_days(rows, flt, days, folders) -> dict:
+    """Daily cost and tokens per project for the per-project chart: the top
+    PROJECT_SERIES projects of the window (ranked before any toggle, so turning
+    one off never promotes another into its colour), each flagged included or
+    not, plus "other" = the included projects outside the top."""
+    by_proj: dict = {}
+    for r in rows:
+        by_proj.setdefault(r["project"], []).append(r)
+    ranked = sorted(by_proj, key=lambda k: -sum(x["cost"] or 0 for x in by_proj[k]))
+    top = ranked[:PROJECT_SERIES]
+
+    def series(rs):
+        per = {d: [] for d in days}
+        for r in rs:
+            if r["day"] in per:
+                per[r["day"]].append(r)
+        out = []
+        for d in days:
+            t = _totals(per[d])
+            out.append({"cost": _r(t["cost"]), "tokens": _token_split(t)})
+        return out
+    res = [{"key": k, "label": project_label(k, folders), "included": flt.keeps(k),
+            "days": series(by_proj[k])} for k in top]
+    rest = [r for k in ranked[PROJECT_SERIES:] if flt.keeps(k) for r in by_proj[k]]
+    other = {"key": "__other__", "label": f"Other ({len(ranked) - len(top)})", "included": True,
+             "days": series(rest)} if len(ranked) > len(top) else None
+    return {"days": days, "series": res, "other": other}
 
 
 def _last_scan(con):
@@ -221,12 +299,11 @@ def _last_scan(con):
         .strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _turns(con, start, end, project):
+def _turns(con, start, end, flt):
     """Turn classes (chat vs action kinds), triggers and the top turns. A turn's
     cost = its own replies + the agents it spawned (Agent by meta.toolUseId,
     Workflow by toolUseResult.runId)."""
-    pf = " AND f.project = ?" if project else ""
-    pa = [project] if project else []
+    pf, pa = flt.sql("f.project")
     turns = {}
     for r in con.execute(
             "SELECT t.turn_id, t.trigger, t.day, t.start_ts, f.reply_kind FROM turns t "
@@ -304,9 +381,8 @@ def _turns(con, start, end, project):
     }
 
 
-def _breaks(con, start, end, project):
-    pf = " AND project = ?" if project else ""
-    pa = [project] if project else []
+def _breaks(con, start, end, flt):
+    pf, pa = flt.sql("project")
     res = []
     for r in con.execute(
             "SELECT CASE WHEN kind IN ('main-interactive', 'main-headless') THEN 'main' ELSE 'agents' END, "
@@ -321,11 +397,10 @@ def _breaks(con, start, end, project):
     return {"total": _r(sum(x["excess"] for x in res)), "allWrites": _r(writes), "byCause": res}
 
 
-def _rent(con, start, end, project):
+def _rent(con, start, end, flt):
     """Context rent ("bloat"): what a tool result or an injected context block
     costs to write once and re-read in every later reply until compaction."""
-    pf = " AND f.project = ?" if project else ""
-    pa = [project] if project else []
+    pf, pa = flt.sql("f.project")
     res = {"tool": [], "inject": []}
     for r in con.execute(
             "SELECT r.kind, r.key, SUM(r.n), SUM(r.tokens), SUM(r.write_cost), SUM(r.carry_cost) "
@@ -344,10 +419,9 @@ def _rent(con, start, end, project):
     return out
 
 
-def _sessions(con, start, end, project, folders):
+def _sessions(con, start, end, flt, folders):
     """Root sessions (a delegator run = the root plus every descendant)."""
-    pf = " AND r.project = ?" if project else ""
-    pa = [project] if project else []
+    pf, pa = flt.sql("r.project")
     g: dict = {}
     for r in con.execute(
             "SELECT f.root_session, f.reply_kind, f.session_id, r.model, SUM(r.cost), COUNT(*), "
@@ -386,9 +460,8 @@ def _sessions(con, start, end, project, folders):
             "top": rows[:TOP]}
 
 
-def _base_context(con, start, end, project):
-    pf = " AND r.project = ?" if project else ""
-    pa = [project] if project else []
+def _base_context(con, start, end, flt):
+    pf, pa = flt.sql("r.project")
     by: dict = {}
     for r in con.execute(
             "SELECT r.kind, r.prompt FROM replies r JOIN (SELECT file_id, MIN(line) AS line FROM "
@@ -399,9 +472,8 @@ def _base_context(con, start, end, project):
              "p90": int(_pct(v, 0.9))} for k, v in sorted(by.items())]
 
 
-def _compactions(con, start, end, project):
-    pf = " AND f.project = ?" if project else ""
-    pa = [project] if project else []
+def _compactions(con, start, end, flt):
+    pf, pa = flt.sql("f.project")
     return [{"trigger": r[0] or "?", "n": r[1]} for r in con.execute(
         "SELECT c.trigger, COUNT(*) FROM compactions c JOIN files f ON f.id = c.file_id "
         f"WHERE c.day >= ? AND c.day <= ?{pf} GROUP BY 1", [start, end] + pa)]
@@ -483,11 +555,11 @@ def _conf(c):
     return " / ".join(f"{k} {_money(v)}" for k, v in c.items() if v)
 
 
-BY_CHOICES = ("summary", "project", "session", "card", "model", "kind", "day", "tool",
-              "turn-kind", "turn", "breaks")
+BY_CHOICES = ("summary", "project", "project-day", "session", "card", "model", "kind", "day",
+              "tool", "turn-kind", "turn", "breaks")
 
 
-def to_text(o: dict, by: str = "summary") -> str:
+def to_text(o: dict, by: str = "summary", units: str = "cost") -> str:
     t = o["totals"]
     head = (f"Tokens · last {o['sinceDays']}d ({o['from']} to {o['to']})"
             + (f" · project {o['projectLabel']}" if o.get("project") else "")
@@ -497,6 +569,8 @@ def to_text(o: dict, by: str = "summary") -> str:
     L.append(f"  total      : {_money(t['cost'])} over {t['replies']:,} replies"
              + (f"  (incl. {_money(est['cost'])} on {est['replies']:,} replies with ESTIMATED "
                 f"output; recorded-only {_money(t['costRaw'])})" if est["replies"] else ""))
+    if o.get("exclude"):
+        L.append("  excluded   : " + ", ".join(project_label(e or None) for e in o["exclude"]))
     if t["unpricedReplies"]:
         L.append(f"  unpriced   : {t['unpricedReplies']} replies on unknown models (tokens only)")
     if by == "summary":
@@ -531,10 +605,19 @@ def to_text(o: dict, by: str = "summary") -> str:
             L.extend(f"    - {s}" for s in o["insights"])
         return "\n".join(L)
 
+    tok = units == "tokens"
+    if tok:
+        L.append("  tokens     : new = output + uncached input + cache writes; cache reads apart")
+
+    def val(r):
+        if tok:
+            k = r["tokens"]
+            return f"{_tok(k['new']):>8s} new  {_tok(k['cacheRead']):>8s} read"
+        return f"{_money(r['cost']):>10s} {r.get('share', 0):6.1%}"
+
     def table(rows, label, extra=lambda r: ""):
         for r in rows:
-            L.append(f"  {str(label(r))[:40]:40s} {_money(r['cost']):>10s} {r.get('share', 0):6.1%}"
-                     f"  {extra(r)}")
+            L.append(f"  {str(label(r))[:40]:40s} {val(r)}  {extra(r)}")
 
     if by == "project":
         table(o["byProject"], lambda r: r["label"] + (" (folder)" if r["folder"] else ""),
@@ -549,7 +632,17 @@ def to_text(o: dict, by: str = "summary") -> str:
         table(o["byKind"], lambda r: r["key"])
     elif by == "day":
         for d in o["byDay"]:
-            L.append(f"  {d['day']}  {_money(d['cost']):>10s}  {d['replies']:>7,} replies")
+            L.append(f"  {d['day']}  {val(d)}  {d['replies']:>7,} replies")
+    elif by == "project-day":
+        pd = o["byProjectDay"]
+        cols = [x for x in pd["series"] if x["included"]] + ([pd["other"]] if pd["other"] else [])
+        L.append("  " + "day       " + "".join(f"{c['label'][:11]:>12s}" for c in cols))
+        for i, d in enumerate(pd["days"]):
+            cells = []
+            for c in cols:
+                x = c["days"][i]
+                cells.append(_tok(x["tokens"]["new"]) if tok else _money(x["cost"]))
+            L.append(f"  {d}" + "".join(f"{v:>12s}" for v in cells))
     elif by == "session":
         for s in o["sessions"]["top"]:
             L.append(f"  {s['session'][:8]}  {_money(s['total']):>10s}  own {_money(s['own']):>9s}"
