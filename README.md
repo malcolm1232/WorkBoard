@@ -115,6 +115,27 @@ No server, no hosting, no cost: a local job polls Telegram every 15 minutes and 
 One honest limit: Telegram itself drops an unconfirmed message after 24 hours if the machine never comes back online to poll for it.
 That is why the bot's `saved` reply on your phone is the real capture contract, not just a nicety.
 
+### 6. 🆕 Every new project gets its own board
+
+Start Claude Code in a new project folder and a board is created for it automatically, in the background, without slowing the session down.
+The project is the git repository you are in, or the folder itself if it is not a repo, so `~/Desktop/my-idea` counts even when it is empty.
+A git worktree uses its main repository's board, and a folder that already has a board (or sits under one) just uses it.
+
+Folders that hold projects but are not one are skipped: your home folder, Desktop, Documents, Downloads, Pictures, Movies, Music, Library, iCloud / OneDrive / Dropbox / Google Drive roots, external disk roots, and anything under system or temporary folders, `node_modules`, `.venv`, `.git` or `.claude`.
+Inside Downloads only a git repository gets a board.
+Only sessions you are sitting in count: `claude -p`, SDK runs and sub-agents never create boards.
+
+If a WorkBoard tab is already open, no new tab opens: the new board appears in that tab's project switcher with a "New board" notice.
+
+```
+card.py autocreate status            # current setting and excluded folders
+card.py autocreate mode ask          # ask first (auto = default, off = never)
+card.py autocreate never ~/scratch   # never for this folder or anything under it
+card.py autocreate allow ~/scratch   # undo that
+```
+
+The settings live in `~/.board-steward/config.json`, and `BOARD_NO_AUTO_BOOTSTRAP=1` still turns creation off for a single run.
+
 ---
 
 ## 📊 Token-Efficiency Summary — WorkBoard vs mem0 · claude-mem · Letta · graphify
