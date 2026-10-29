@@ -54,6 +54,8 @@ if _scripts_dir not in sys.path:
 import _boardio  # noqa: E402  (write-safety: flock + rolling backups)
 import _render   # noqa: E402  (shared markdown/html renderers — #115 export)
 import _metrics  # noqa: E402  (velocity metrics — #114)
+import _tokens   # noqa: E402  (token + API-equivalent cost index — #958)
+import _tokens_report  # noqa: E402
 
 _write_lock = threading.Lock()
 _clients_lock = threading.Lock()
@@ -646,6 +648,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._handle_index_json()
         elif path == "/metrics":
             self._handle_metrics()
+        elif path == "/tokens":
+            self._handle_tokens()
         elif path in ("/export.md", "/export.html"):
             self._handle_export(path)
         elif path == "/flash":
@@ -711,6 +715,34 @@ class BoardHandler(BaseHTTPRequestHandler):
             return
         self._send(200, json.dumps(_metrics.compute(state, since_days),
                                    ensure_ascii=False).encode("utf-8"))
+
+    def _handle_tokens(self):
+        """GET /tokens - #958 token + API-equivalent cost JSON (same dict as
+        `card.py tokens --json`). ?since=Nd window (default 7); ?scope=board
+        narrows to this board's project. The index is refreshed by the
+        background scanner, never inside the request; before its first scan
+        completes this answers {"indexing": true}."""
+        qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        raw = (qs.get("since") or ["7"])[0].strip().rstrip("d")
+        since_days = int(raw) if raw.isdigit() and 0 < int(raw) <= 3660 else 7
+        project = None
+        if (qs.get("scope") or [""])[0] == "board":
+            project = str(Path(self.board_dir).resolve().parent)
+        _kick_token_scan()
+        try:
+            con = _tokens.connect()
+            try:
+                if con.execute("SELECT value FROM meta WHERE key='last_scan'").fetchone() is None:
+                    self._send(200, json.dumps({"indexing": True}).encode())
+                    return
+                out = _tokens_report.compute(con, since_days=since_days, project=project)
+            finally:
+                con.close()
+        except Exception as e:
+            self._send(500, json.dumps({"error": f"token index unreadable: {e}"}).encode())
+            return
+        out["boardProject"] = str(Path(self.board_dir).resolve().parent)
+        self._send(200, json.dumps(out, ensure_ascii=False).encode("utf-8"))
 
     def _handle_export(self, path):
         """GET /export.md|/export.html — #115 static shareable snapshot.
@@ -1380,6 +1412,45 @@ def _build_arg_parser():
     return ap
 
 
+# #958 - token index scanner. One background thread per server; the scan lock
+# in _tokens makes concurrent servers take turns, and min_interval keeps it to
+# about one scan a minute however many boards are running.
+TOKEN_SCAN_EVERY = 60
+_token_scan_lock = threading.Lock()
+
+
+def _token_scan_once():
+    if not _token_scan_lock.acquire(blocking=False):
+        return
+    try:
+        _tokens.refresh(min_interval=TOKEN_SCAN_EVERY - 5, blocking=False)
+    except Exception as e:  # never let the scanner take the server down
+        print(f"warn: token index scan failed: {e}", file=sys.stderr)
+    finally:
+        _token_scan_lock.release()
+
+
+def _kick_token_scan():
+    """Start a scan in the background now (panel open), unless one is running."""
+    if os.environ.get("BOARD_TOKENS_DISABLE") == "1":
+        return
+    threading.Thread(target=_token_scan_once, daemon=True).start()
+
+
+def _start_token_scanner():
+    if os.environ.get("BOARD_TOKENS_DISABLE") == "1":
+        return
+
+    def loop():
+        # A short grace period: throwaway servers (tests, probes) exit before
+        # ever paying for a scan; long-lived boards start indexing right after.
+        time.sleep(5)
+        while True:
+            _token_scan_once()
+            time.sleep(TOKEN_SCAN_EVERY)
+    threading.Thread(target=loop, daemon=True, name="token-scanner").start()
+
+
 def main():
     args = _build_arg_parser().parse_args()
     _maybe_handle_hooks(args)
@@ -1608,6 +1679,7 @@ def _run_server(board_dir, args):
         _registry_remove = None
         print(f"warn: port-registry write failed: {e}", file=sys.stderr)
     print(f"📋 board-steward v4 serving {board_dir} at {url} (SSE on /events)", flush=True)
+    _start_token_scanner()
     if BoardHandler.auth_token:
         _print_lan_url(args)
     try:
