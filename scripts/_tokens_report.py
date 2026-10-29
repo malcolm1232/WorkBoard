@@ -41,30 +41,26 @@ def _window(since_days: int):
     return start.isoformat(), today.isoformat()
 
 
+_LABELS: dict = {}
+
+
 def project_label(key: str | None, folders: _tokens.FolderKeys | None = None) -> str:
+    """One naming rule for every table: an alias from folders.json, else a
+    board project's switcher name (its board title, cleaned like the header
+    tabs), else the folder name."""
     if not key:
         return "(unattributed)"
     if folders and key in folders.aliases:
         return folders.aliases[key]
-    return os.path.basename(key.rstrip("/")) or key
-
-
-class _Titles:
-    """Card titles from each board's board.json, read once per report."""
-
-    def __init__(self):
-        self._boards: dict[str, dict] = {}
-
-    def get(self, board: str, num: str) -> str | None:
-        if board not in self._boards:
-            m = {}
-            try:
-                d = json.loads((Path(board) / "board.json").read_text())
-                m = {str(c.get("num")): c.get("title") or "" for c in d.get("cards", [])}
-            except Exception:
-                m = {}
-            self._boards[board] = m
-        return self._boards[board].get(str(num))
+    if key not in _LABELS:
+        name = None
+        try:
+            d = json.loads((Path(key) / "board" / "board.json").read_text())
+            name = _tokens.clean_board_title(d.get("title")) or None
+        except Exception:
+            name = None
+        _LABELS[key] = name or os.path.basename(key.rstrip("/")) or key
+    return _LABELS[key]
 
 
 def _totals(rows) -> dict:
@@ -118,7 +114,8 @@ def _pct(xs, q):
 def compute(con, since_days: int = 7, project: str | None = None) -> dict:
     start, end = _window(since_days)
     folders = _tokens.FolderKeys()
-    titles = _Titles()
+    titles = _tokens.BoardCards()
+    _LABELS.clear()
     pf = " AND project = ?" if project else ""
     pa = [project] if project else []
     daily = [dict(r) for r in con.execute(
@@ -196,14 +193,14 @@ def compute(con, since_days: int = 7, project: str | None = None) -> dict:
     out["byProject"] = rollup(lambda r: r["project"], proj_extra)
 
     def card_extra(k, rs, t):
+        conf = conf_split(rs, "card_rule", CARD_CONFIDENCE)
         if not k:
-            return {"label": "(no card)", "num": None, "board": None, "title": None,
-                    "confidence": conf_split(rs, "card_rule", CARD_CONFIDENCE)}
+            return {"label": "(no card)", "num": None, "board": None, "project": None,
+                    "title": None, "confidence": conf}
         board, _, num = k.rpartition("#")
-        return {"label": f"#{num}", "num": num, "board": board if board != "?" else None,
-                "project": project_label(os.path.dirname(board), folders) if board != "?" else None,
-                "title": titles.get(board, num) if board != "?" else None,
-                "confidence": conf_split(rs, "card_rule", CARD_CONFIDENCE)}
+        proj = project_label(os.path.dirname(board), folders)
+        return {"label": f"{proj} #{num}", "num": num, "board": board, "project": proj,
+                "title": titles.title(board, num), "confidence": conf}
     out["byCard"] = rollup(lambda r: r["card"], card_extra)
 
     out.update(_turns(con, start, end, project))
@@ -528,8 +525,7 @@ def to_text(o: dict, by: str = "summary") -> str:
                      f"{_conf(p['confidence'])}")
         L.append("  top cards:")
         for p in [x for x in o["byCard"] if x["key"]][:5]:
-            L.append(f"    {(p.get('project') or '?')[:14]:14s} {p['label']:>7s} "
-                     f"{_money(p['cost']):>10s}  {(p.get('title') or '')[:40]}")
+            L.append(f"    {p['label'][:22]:22s} {_money(p['cost']):>10s}  {(p.get('title') or '')[:44]}")
         if o["insights"]:
             L.append("  insights:")
             L.extend(f"    - {s}" for s in o["insights"])
@@ -544,7 +540,7 @@ def to_text(o: dict, by: str = "summary") -> str:
         table(o["byProject"], lambda r: r["label"] + (" (folder)" if r["folder"] else ""),
               lambda r: _conf(r["confidence"]))
     elif by == "card":
-        table(o["byCard"], lambda r: f"{r.get('project') or ''} {r['label']} {r.get('title') or ''}",
+        table(o["byCard"], lambda r: f"{r['label']} {r.get('title') or ''}",
               lambda r: _conf(r["confidence"]))
     elif by == "model":
         table(o["byModel"], lambda r: r["key"] + ("" if r["priced"] else " (UNPRICED)"),

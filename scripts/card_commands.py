@@ -1651,6 +1651,11 @@ def cmd_tokens(args):
                 print("indexing transcripts (first run reads every file; later runs are "
                       "incremental)...", file=sys.stderr)
             ix.refresh(full=args.reindex)
+        elif ix.con.execute("SELECT 1 FROM replies LIMIT 1").fetchone() is None \
+                and ix.con.execute("SELECT 1 FROM daily LIMIT 1").fetchone() is None:
+            sys.exit(f"the token index at {_tokens.tokens_dir()} is empty: nothing has been "
+                     "indexed yet.\nRun `card.py tokens` without --no-refresh to build it "
+                     "(the first run reads every transcript, about half a minute).")
         project = args.project
         if args.board_filter:
             b = Path(args.board_filter).expanduser().resolve()

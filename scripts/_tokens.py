@@ -304,6 +304,7 @@ def card_ref(verb: str, rest: str) -> str | None:
         return m.group(1) if m else None
     return None
 BOARD_ARG = re.compile(r"--board[ =]+['\"]?([^'\" ]+?)/board\.json")
+CD_ABS = re.compile(r"(?:^|[;&|(]\s*)cd\s+(['\"]?)(/[^'\"\s;&|)]+)\1")
 SCRATCH_PARENT = re.compile(
     r"/claude-\d+/[^/]+/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:/|$)")
 
@@ -342,7 +343,7 @@ CREATE TABLE IF NOT EXISTS wf_runs(run_id TEXT PRIMARY KEY, tool_use_id TEXT);
 CREATE TABLE IF NOT EXISTS touches(file_id INTEGER, kind TEXT, key TEXT, n INTEGER,
   PRIMARY KEY(file_id, kind, key));
 CREATE TABLE IF NOT EXISTS card_calls(file_id INTEGER, line INTEGER, ts TEXT, num TEXT,
-  verb TEXT, board TEXT, PRIMARY KEY(file_id, line, num, verb));
+  verb TEXT, board TEXT, cwd TEXT, PRIMARY KEY(file_id, line, num, verb));
 CREATE TABLE IF NOT EXISTS card_log(session_id TEXT, ts TEXT, board TEXT, num TEXT,
   event TEXT, via TEXT);
 CREATE INDEX IF NOT EXISTS card_log_sid ON card_log(session_id);
@@ -362,7 +363,10 @@ CREATE TABLE IF NOT EXISTS daily(
 CREATE INDEX IF NOT EXISTS daily_day ON daily(day);
 """
 
-INDEX_VERSION = "1"
+# Bump when the stored shape changes: the next refresh rebuilds from the
+# transcripts (daily rows older than every retained reply are kept).
+INDEX_VERSION = "2"
+_VERSIONED_TABLES = ("card_calls",)   # tables whose columns changed since v1
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -376,6 +380,13 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     v = con.execute("SELECT value FROM meta WHERE key='version'").fetchone()
     if v is None:
         con.execute("INSERT INTO meta VALUES('version', ?)", (INDEX_VERSION,))
+        con.commit()
+    elif v[0] != INDEX_VERSION:
+        for t in _VERSIONED_TABLES:
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+        con.executescript(SCHEMA)
+        con.execute("INSERT OR REPLACE INTO meta VALUES('version', ?)", (INDEX_VERSION,))
+        con.execute("INSERT OR REPLACE INTO meta VALUES('needs_full', '1')")
         con.commit()
     return con
 
@@ -422,6 +433,76 @@ def root_of(path: str | None, roots: list[str]) -> str | None:
         if path == r or path.startswith(r + "/"):
             return r
     return None
+
+
+def find_board_dir(cwd: str | None) -> str | None:
+    """The board card.py finds from `cwd`: walk up (8 levels, like
+    card_state.find_board) to the first <dir>/board/board.json."""
+    if not cwd:
+        return None
+    cur = cwd.rstrip("/") or "/"
+    for _ in range(8):
+        if os.path.isfile(os.path.join(cur, "board", "board.json")):
+            return os.path.join(cur, "board")
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return None
+
+
+def card_board(explicit: str | None, cwd: str | None, last_active: str | None) -> str | None:
+    """Board dir a `card.py <verb> <n>` call acted on, resolved the way card.py
+    does: --board, else walk up from its cwd, else the session's last-active
+    board. None when none of them names an existing board."""
+    for cand in (explicit, find_board_dir(cwd), last_active):
+        if cand and os.path.isfile(os.path.join(cand, "board.json")):
+            return cand.rstrip("/")
+    return None
+
+
+class BoardCards:
+    """Card numbers + titles per board dir, from board.json and the monthly
+    archives (archive_done.py moves old Done cards to board/archive/*.json)."""
+
+    def __init__(self):
+        self._cache: dict[str, dict] = {}
+
+    def titles(self, board: str) -> dict:
+        if board not in self._cache:
+            m: dict = {}
+            files = [os.path.join(board, "board.json")]
+            arch = os.path.join(board, "archive")
+            if os.path.isdir(arch):
+                files += sorted(os.path.join(arch, f) for f in os.listdir(arch) if f.endswith(".json"))
+            for fp in files:
+                try:
+                    with open(fp, encoding="utf-8") as fh:
+                        d = json.load(fh)
+                except Exception:
+                    continue
+                cards = d.get("cards") if isinstance(d, dict) else d
+                for c in cards or []:
+                    if isinstance(c, dict) and c.get("num") is not None:
+                        m.setdefault(str(c["num"]), c.get("title") or "")
+            self._cache[board] = m
+        return self._cache[board]
+
+    def has(self, board: str, num) -> bool:
+        return str(num) in self.titles(board)
+
+    def title(self, board: str, num) -> str | None:
+        return self.titles(board).get(str(num))
+
+
+def clean_board_title(raw: str | None) -> str:
+    """Project name from a board title, the same rule as board.html's
+    cleanProjectTitle: drop a leading "WorkBoard -" or trailing "- Work Board"
+    affix (any dash), never blanking a board literally named WorkBoard."""
+    t = (raw or "").strip()
+    s2 = re.sub(r"^\s*work\s*board\s*[\u2014\u2013-]\s*", "", t, flags=re.I)
+    s2 = re.sub(r"\s*[\u2014\u2013-]\s*work\s*board\s*$", "", s2, flags=re.I).strip()
+    return s2 or t
 
 
 class FolderKeys:
@@ -687,14 +768,21 @@ class _FileScan:
                 num = card_ref(mm.group(1), mm.group(2))
                 if not num:
                     continue
-                bm = BOARD_ARG.search(cmd)
-                board = bm.group(1) if bm and bm.group(1).startswith("/") else None
-                if board is None:
-                    for rt in self.roots:
-                        if rt + "/" in cmd:
-                            board = rt + "/board"
-                            break
-                self.calls.append((self.fid, ln, ts, num, mm.group(1), board))
+                # card.py resolves its board from --board, else by walking up
+                # from its cwd, else from the session's last-active board.
+                # Record the first two here; the walk and the last-active
+                # fallback run at attribution time (card_board()).
+                cwd = r.get("cwd")
+                for cm in CD_ABS.finditer(cmd[:mm.start()]):
+                    cwd = cm.group(2)
+                bm = BOARD_ARG.search(cmd, mm.start(), mm.end() + len(mm.group(2)))
+                board = None
+                if bm:
+                    bp = bm.group(1)
+                    if not bp.startswith("/") and cwd:
+                        bp = os.path.normpath(os.path.join(cwd, bp))
+                    board = bp if bp.startswith("/") else None
+                self.calls.append((self.fid, ln, ts, num, mm.group(1), board, cwd))
 
     def _touch(self, path):
         rt = root_of(path, self.roots)
@@ -768,6 +856,8 @@ class Index:
         the daily rollup. Returns a small stats dict. Skips (returns
         {"skipped": ...}) when another process holds the scan lock and
         blocking=False, or when the last scan is younger than min_interval."""
+        if self._meta("needs_full"):
+            full = True
         last = self._meta("last_scan")
         if not full and min_interval and last and time.time() - float(last) < min_interval:
             return {"skipped": "fresh"}
@@ -777,6 +867,7 @@ class Index:
             t0 = time.time()
             if full:
                 self._reset()
+                self.con.execute("DELETE FROM meta WHERE key='needs_full'")
             stats = self._scan()
             stats["secs"] = round(time.time() - t0, 2)
             self._set_meta("last_scan", str(time.time()))
@@ -791,15 +882,16 @@ class Index:
         self.con.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, value))
 
     def _reset(self):
-        """Full re-index: forget offsets and derived rows. `daily` rows older
-        than every retained reply are kept, since their transcripts may be gone."""
-        oldest = self.con.execute("SELECT MIN(day) FROM replies").fetchone()[0]
-        for t in ("replies", "turns", "spawns", "wf_runs", "touches", "card_calls",
-                  "rent", "compactions", "files", "card_log"):
-            self.con.execute(f"DELETE FROM {t}")
-        if oldest:
-            self.con.execute("DELETE FROM daily WHERE day >= ?", (oldest,))
-        self.con.execute("DELETE FROM meta WHERE key IN ('card_log_offset')")
+        """Full re-index: forget every file still on disk so it is re-read from
+        byte 0. Files Claude Code has already deleted keep their rows (they
+        cannot be re-read), and the rollup is rebuilt from the reply rows, so
+        a reindex never loses history."""
+        for r in self.con.execute("SELECT id, path FROM files").fetchall():
+            if os.path.exists(r[1]):
+                self._forget_file(r[0])
+                self.con.execute("DELETE FROM files WHERE id=?", (r[0],))
+        self.con.execute("DELETE FROM card_log")
+        self.con.execute("DELETE FROM meta WHERE key IN ('card_log_offset', 'roots')")
         self.con.commit()
 
     # ---- scan ----
@@ -924,7 +1016,7 @@ class Index:
         con.executemany("INSERT OR IGNORE INTO turns VALUES(?,?,?,?,?)", fs.turns)
         con.executemany("INSERT OR IGNORE INTO spawns VALUES(?,?,?,?,?,?)", fs.spawns)
         con.executemany("INSERT OR IGNORE INTO wf_runs VALUES(?,?)", fs.wf_runs)
-        con.executemany("INSERT OR IGNORE INTO card_calls VALUES(?,?,?,?,?,?)", fs.calls)
+        con.executemany("INSERT OR IGNORE INTO card_calls VALUES(?,?,?,?,?,?,?)", fs.calls)
         con.executemany("INSERT OR IGNORE INTO compactions VALUES(?,?,?,?,?,?)", fs.comps)
         con.executemany(
             "INSERT INTO touches VALUES(?,?,?,?) ON CONFLICT(file_id, kind, key) "
@@ -1018,6 +1110,7 @@ class Index:
     # ---- attribution ----
     def _attribute(self, dirty_files, dirty_sessions):
         con = self.con
+        self.cards = BoardCards()
         roots = board_roots()
         files = {r["id"]: dict(r) for r in con.execute(
             "SELECT id, kind, session_id, cwds, interactive, first_ts, spawn_tool_use, run_id, "
@@ -1108,13 +1201,23 @@ class Index:
         for r in con.execute(f"SELECT ts, board, num, event FROM card_log WHERE session_id IN ({q}) "
                              "AND event IN ('start', 'touch', 'stop')", list(sids)):
             if r[0] and r[2]:
-                events.append((r[0], r[1], r[2], "log", None))
+                ok = r[1] and self.cards.has(r[1], r[2])
+                events.append((r[0], r[1] if ok else None, r[2] if ok else None,
+                               "log" if ok else None, None))
         fids = [f["id"] for f in fl]
+        fsid = {f["id"]: f["session_id"] for f in fl}
         q = ",".join("?" * len(fids))
-        for r in con.execute(f"SELECT ts, board, num, file_id FROM card_calls WHERE file_id IN ({q})",
-                             fids):
-            if r[0]:
-                events.append((r[0], r[1], r[2], "backfill", r[3]))
+        for r in con.execute(f"SELECT ts, board, num, file_id, cwd FROM card_calls "
+                             f"WHERE file_id IN ({q})", fids):
+            if not r[0]:
+                continue
+            # A call whose board cannot be resolved, or whose number is not a
+            # card on that board, ends the previous card without naming one:
+            # counted as no card rather than guessed.
+            board = card_board(r[1], r[4], sess_board.get(fsid[r[3]]))
+            ok = board is not None and self.cards.has(board, r[2])
+            events.append((r[0], board if ok else None, r[2] if ok else None,
+                           "backfill" if ok else None, r[3]))
         events.sort(key=lambda e: e[0])
         ev_ts = [e[0] for e in events]
         for f in fl:
@@ -1143,10 +1246,8 @@ class Index:
                 tu = f.get("spawn_tool_use") or run_tool.get(f.get("run_id"))
                 anchor = spawn_ts.get(tu) if tu else None
                 anchor = anchor or f.get("first_ts")
-            default_board = (proj + "/board") if proj and rule not in ("paths-folder", "none") \
-                else None
             ups = []
-            for r in con.execute("SELECT mid, ts, project FROM replies WHERE file_id=?", (f["id"],)):
+            for r in con.execute("SELECT mid, ts FROM replies WHERE file_id=?", (f["id"],)):
                 ts = r[1] or ""
                 e = None
                 if own:
@@ -1156,11 +1257,10 @@ class Index:
                     t = anchor if anchor else ts
                     i = _bisect_right(ev_ts, t) - 1
                     e = events[i] if i >= 0 else None
-                if e is None:
+                if e is None or e[1] is None:
                     ups.append((None, None, r[0]))
                     continue
-                board = e[1] or ((r[2] + "/board") if r[2] else default_board)
-                ups.append((f"{board or '?'}#{e[2]}", e[3], r[0]))
+                ups.append((f"{e[1]}#{e[2]}", e[3], r[0]))
             con.executemany("UPDATE replies SET card=?, card_rule=? WHERE mid=?", ups)
 
     # ---- retention + rollup ----

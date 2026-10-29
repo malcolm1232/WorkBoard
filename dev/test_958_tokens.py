@@ -316,6 +316,68 @@ def test_card_events():
     check("\u2014" not in txt, "no em dash in the report text")
 
 
+def test_card_board_resolution():
+    print("card board resolution (card #12 exists on two boards)")
+    gamma = TMP / "work" / "Gamma"
+    (gamma / "board").mkdir(parents=True)
+    (gamma / "board" / "board.json").write_text(json.dumps(
+        {"title": "Gamma - Work Board", "cards": [{"num": 12, "title": "Gamma twelve"}]}))
+    (TMP / "assign.json").write_text(json.dumps(
+        {str(BOARDP / "board"): 7999, str(gamma / "board"): 7998}))
+    (BOARDP / "board" / "archive").mkdir()
+    (BOARDP / "board" / "archive" / "board-2026-09.json").write_text(json.dumps(
+        {"cards": [{"num": 5, "title": "Archived five"}]}))
+    S6_, S7, S8, S9 = (f"{i:08d}-0000-0000-0000-000000000000" for i in range(6, 10))
+
+    def sess(sid, cwd, cmd):
+        write(SLUG / f"{sid}.jsonl", [
+            user("2026-10-28T19:00:00Z", sid=sid, cwd=cwd),
+            asst(sid[:8] + "a", "2026-10-28T19:00:01Z", inp=1, out=1, cr=1000, sid=sid, cwd=cwd,
+                 tools=[("Bash", "b" + sid[:8], {"command": cmd})]),
+            asst(sid[:8] + "b", "2026-10-28T19:00:02Z", inp=1, out=1, cr=1000, sid=sid, cwd=cwd),
+        ])
+    sess(S6_, str(gamma / "src"), "python3 card.py fly 12 inprogress")            # cwd walk-up
+    sess(S7, "/nowhere", "python3 card.py fly 12 inprogress")                     # nothing to go on
+    sess(S8, "/nowhere", f"cd {gamma} && python3 card.py fly 12 inprogress")      # cd in the command
+    sess(S9, str(gamma), f"python3 card.py --board {BOARDP}/board/board.json fly 5 done; "
+                         f"python3 card.py --board {BOARDP}/board/board.json fly 999 done")
+    _tokens.refresh()
+    cards = dict(q("SELECT mid, card FROM replies"))
+    check(cards[S6_[:8] + "b"] == f"{gamma}/board#12",
+          "no --board: the cwd's board wins (Gamma #12, not Alpha #12)")
+    check(cards[S7[:8] + "b"] is None, "no --board, no cwd board, no last-active: unattributed")
+    check(cards[S8[:8] + "b"] == f"{gamma}/board#12", "`cd <dir> &&` before card.py sets its cwd")
+    check(cards[S9[:8] + "b"] is None,
+          "a number that is not a card on the resolved board ends attribution (no guess)")
+    con = _tokens.connect()
+    o = _tokens_report.compute(con, since_days=3650)
+    con.close()
+    rows = {c["key"]: c for c in o["byCard"] if c["key"]}
+    g = rows.get(f"{gamma}/board#12")
+    check(g is not None and g["title"] == "Gamma twelve" and g["label"] == "Gamma #12",
+          "card row: switcher-style project name + real title")
+    projs = {p["key"]: p["label"] for p in o["byProject"]}
+    check(projs.get(str(gamma)) == "Gamma", "Projects and Cards use the same project name")
+    # Make the archived card attributable: S9's first call (fly 5) is valid.
+    write(SLUG / f"{S9}.jsonl", [asst(S9[:8] + "c", "2026-10-28T19:00:00.5Z", inp=1, out=1, cr=1000,
+                                      sid=S9, cwd=str(gamma))], mode="a")
+    _tokens.refresh()
+    titled = _tokens.BoardCards()
+    check(titled.title(str(BOARDP / "board"), 5) == "Archived five",
+          "cards moved to board/archive/ still resolve with their titles")
+    check(all(r["title"] for r in o["byCard"] if r["key"]), "every card row has a title")
+    con = _tokens.connect()
+    con.execute("UPDATE meta SET value='1' WHERE key='version'")
+    con.commit()
+    con.close()
+    before = sum(r[0] for r in q("SELECT cost FROM daily"))
+    _tokens.refresh()
+    check(q("SELECT value FROM meta WHERE key='version'")[0][0] == _tokens.INDEX_VERSION
+          and not q("SELECT 1 FROM meta WHERE key='needs_full'")
+          and near(before, sum(r[0] for r in q("SELECT cost FROM daily")), 1e-9),
+          "an index from an older version rebuilds itself on the next refresh, totals unchanged")
+
+
 def test_endpoint():
     print("GET /tokens")
     os.environ["BOARD_TOKENS_DISABLE"] = "1"   # no background scan thread here
@@ -344,6 +406,17 @@ def test_endpoint():
     check(st == 200 and bad["sinceDays"] == 7, "a bad ?since falls back to 7 days")
 
 
+def test_cli_empty_index():
+    print("card.py tokens --no-refresh on an empty index")
+    import subprocess
+    env = {**os.environ, "BOARD_TOKENS_DIR": str(TMP / "empty-index")}
+    p = subprocess.run([sys.executable, str(REPO / "scripts" / "card.py"), "tokens", "--no-refresh"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    check(p.returncode != 0 and "is empty" in p.stderr and "without --no-refresh" in p.stderr
+          and "$0.00" not in p.stdout,
+          "says the index is empty and how to build it, instead of printing $0.00")
+
+
 def test_ui_markup():
     print("board.html Tokens view")
     html = (REPO / "templates" / "board.html").read_text()
@@ -360,7 +433,9 @@ def main():
     before = test_index()
     test_incremental(before)
     test_card_events()
+    test_card_board_resolution()
     test_endpoint()
+    test_cli_empty_index()
     test_ui_markup()
     print("\nFAIL" if _fails else "\nPASS", f"({_fails} failing)")
     sys.exit(1 if _fails else 0)
