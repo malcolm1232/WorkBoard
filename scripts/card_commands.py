@@ -131,7 +131,9 @@ def cmd_add(args, d, board):
 
     # #254 — a card born directly into In Progress is active work too (parity
     # with the UI's handleCardAdded → applyActiveWorkTransition).
-    _set_active_work(d, card, "", target_col)
+    _set_active_work(d, card, "", target_col, via="add")
+    if target_col != "inprogress":
+        _note_card_event(card, "add", "add")
     _record_move(card, None, target_col)
     rev = atomic_save(board, d)
     if auto_urgent_kw:
@@ -151,6 +153,7 @@ def cmd_add(args, d, board):
 
 def cmd_update(args, d, board):
     c = find_card(d, args.ref)
+    _note_card_event(c, "touch", "update")
     changed = []
     if args.title is not None:    c["title"] = args.title;       changed.append("title")
     if args.code is not None:     c["code"] = args.code;         changed.append("code")
@@ -297,7 +300,42 @@ def _prune_active_work(d, now_ms):
             del aw[sid]
 
 
-def _set_active_work(d, card, old_col, new_col):
+# #958 - card events for per-card token attribution. Queued here, written by
+# card.py only after the board write commits (a rev-conflict retry re-runs the
+# command, and a failed write must leave no event behind).
+_PENDING_CARD_EVENTS: list = []
+
+
+def _note_card_event(card, event, via, sid=None):
+    """Queue one {at, sessionId, cardId, num, event, via} event. Bare CLI and
+    automation runs ('_cli' / '_auto') have no transcript to attribute, so they
+    are skipped."""
+    sid = sid or _session_id()
+    if not sid or sid.startswith("_") or not card:
+        return
+    _PENDING_CARD_EVENTS.append({
+        "at": now_iso(), "sessionId": sid, "cardId": card.get("id"),
+        "num": card.get("num"), "event": event, "via": via})
+
+
+def flush_card_events(board) -> None:
+    """Write the queued card events to ~/.board-steward/tokens/card_events.jsonl
+    with the board dir. Best-effort, never raises."""
+    evs = list(_PENDING_CARD_EVENTS)
+    _PENDING_CARD_EVENTS.clear()
+    if not evs:
+        return
+    try:
+        import _tokens
+        bdir = str(Path(board).resolve().parent)
+        for e in evs:
+            e["board"] = bdir
+        _tokens.append_card_events(evs)
+    except Exception:
+        pass
+
+
+def _set_active_work(d, card, old_col, new_col, via=None):
     """#254/#587/#608 — track the active-work card (the pulse + top-pin), now keyed
     PER SESSION. A card merely SITTING in In Progress never becomes active (only a
     real transition does); moving the active card out clears it.
@@ -311,17 +349,24 @@ def _set_active_work(d, card, old_col, new_col):
     _migrate_active_work(d, now_ms)
     aw = _active_work_map(d)
     sid = _session_id()
+    started = False
     if new_col == "inprogress" and old_col != "inprogress":
         aw[sid] = {"cardId": card["id"], "ts": now_ms}
+        _note_card_event(card, "start", via, sid)
+        started = True
     elif old_col == "inprogress" and new_col != "inprogress":
         # A card leaving In-Progress stops pulsing for EVERY session pointing at
         # it, no matter who moved it out.
         for s in [s for s, e in aw.items() if (e or {}).get("cardId") == card["id"]]:
             del aw[s]
+        _note_card_event(card, "stop", via, sid)
     # Heartbeat: keep this session's pulse fresh on any active-work activity so a
     # long-lived session doesn't TTL-expire mid-flow.
     if sid in aw:
         aw[sid]["ts"] = now_ms
+        if not started:
+            active = next((c for c in d.get("cards", []) if c.get("id") == aw[sid]["cardId"]), None)
+            _note_card_event(active, "touch", via, sid)
     _prune_active_work(d, now_ms)
 
 
@@ -550,7 +595,7 @@ def cmd_fly(args, d, board):
         c["writeup"] = writeup
 
     c["updatedAt"] = now_iso()
-    _set_active_work(d, c, old, args.column)
+    _set_active_work(d, c, old, args.column, via="fly")
     # #577 HARDENING — done is ALWAYS reached via inprogress. If a card flies
     # straight to done from task/backlog/etc (a direct ship, a reconcile move,
     # or any path that skipped the pulse), record the intermediate inprogress
@@ -604,7 +649,7 @@ def cmd_improve(args, d, board):
     })
     c["lastTouchedSubtask"] = sid
     c["updatedAt"] = now_iso()
-    _set_active_work(d, c, old, "inprogress")
+    _set_active_work(d, c, old, "inprogress", via="improve")
     _record_move(c, old, "inprogress")
     rev = atomic_save(board, d)
     print(f"✨ #{c['num']} {old} → inprogress (+subtask {sid}) (rev {rev})")
@@ -643,7 +688,7 @@ def cmd_bug(args, d, board):
     })
     c["lastTouchedSubtask"] = sid
     c["updatedAt"] = now_iso()
-    _set_active_work(d, c, old, "inprogress")
+    _set_active_work(d, c, old, "inprogress", via="bug")
     _record_move(c, old, "inprogress")
     rev = atomic_save(board, d)
     print(f"🐞 #{c['num']} {old} → inprogress (+bug tag, +subtask {sid}) (rev {rev})")
@@ -917,7 +962,7 @@ def cmd_auto_ship(args, d, board):
             st["doneAt"] = ts
     c["writeup"] = writeup
     c["updatedAt"] = ts
-    _set_active_work(d, c, old, "done")
+    _set_active_work(d, c, old, "done", via="auto-ship")
     _record_move(c, old, "done", via="autoship")
     rev = atomic_save(board, d)
     print(f"✈ #{c['num']} {old} → done [auto-ship, {len(hits)} commit hits] (rev {rev})")
@@ -1583,6 +1628,43 @@ def cmd_metrics(args, d, board):
         print(_metrics.to_text(m))
 
 
+def _parse_since(raw) -> int:
+    """'7', '7d' or '30d' -> days (>= 1)."""
+    s = str(raw or "7").strip().lower().rstrip("d")
+    if not s.isdigit() or int(s) < 1:
+        sys.exit(f"error: --since wants N or Nd (got {raw!r})")
+    return int(s)
+
+
+def cmd_tokens(args):
+    """#958 - token consumption + API-equivalent cost across every Claude Code
+    transcript, attributed to projects, sessions, turns and cards. Refreshes the
+    incremental index first (fast after the first full scan). Board-less: with
+    --board it narrows to that board's project."""
+    import _tokens
+    import _tokens_report
+    days = _parse_since(args.since)
+    ix = _tokens.Index()
+    try:
+        if not args.no_refresh:
+            if ix._meta("last_scan") is None or args.reindex:
+                print("indexing transcripts (first run reads every file; later runs are "
+                      "incremental)...", file=sys.stderr)
+            ix.refresh(full=args.reindex)
+        project = args.project
+        if args.board_filter:
+            b = Path(args.board_filter).expanduser().resolve()
+            project = str(b.parent.parent if b.name == "board.json" else b.parent
+                          if b.name == "board" else b)
+        o = _tokens_report.compute(ix.con, since_days=days, project=project)
+    finally:
+        ix.close()
+    if args.json:
+        print(json.dumps(o, ensure_ascii=False, indent=2))
+    else:
+        print(_tokens_report.to_text(o, by=args.by))
+
+
 def cmd_export(args, d, board):
     """5.5c (#115) — write a shareable snapshot (Markdown or HTML) to a file or
     stdout. Format inferred from --to extension (.html → HTML, else Markdown),
@@ -1720,7 +1802,7 @@ def cmd_claim(args, d, board):
             meta={"telegram": {"tid": tid, "updateId": item.get("update_id"),
                                "capturedAt": item.get("ts")}},
         )
-        _set_active_work(d, card, "", col)
+        _set_active_work(d, card, "", col, via="claim")
         _record_move(card, None, col)
 
         # Guard 2 — pre-save ownership re-check (see docstring). Nothing has

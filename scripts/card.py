@@ -59,6 +59,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 import _boardio                  # noqa: E402  (board_lock for the no-server path)
+import card_commands             # noqa: E402  (#958 card-event queue)
 import card_state                # noqa: E402  (set _HOLDING_LOCK on the module)
 from card_state import *         # noqa: E402,F401,F403  (find_board/load/atomic_save/...)
 from card_commands import *      # noqa: E402,F401,F403  (cmd_* referenced by build_parser)
@@ -349,6 +350,22 @@ def build_parser():
                      help="window in days (default 7)")
     pmt.add_argument("--json", action="store_true", help="emit the raw metrics dict")
     pmt.set_defaults(fn=cmd_metrics)
+
+    # tokens (#958) - token + API-equivalent cost tracking (board-less)
+    ptk = sub.add_parser("tokens",
+                         help="token consumption + API-equivalent cost by project, session, "
+                              "card, model, day, tool or turn kind. --json for the raw dict.")
+    ptk.add_argument("--since", default="7d", help="window: N or Nd days (default 7d)")
+    ptk.add_argument("--by", default="summary", choices=[
+        "summary", "project", "session", "card", "model", "kind", "day", "tool",
+        "turn-kind", "turn", "breaks"], help="breakdown to print (default summary)")
+    ptk.add_argument("--project", default=None, help="narrow to one project root path")
+    ptk.add_argument("--json", action="store_true", help="emit the full report dict")
+    ptk.add_argument("--reindex", action="store_true",
+                     help="rebuild the index from scratch (kept daily history survives)")
+    ptk.add_argument("--no-refresh", action="store_true", dest="no_refresh",
+                     help="report from the index as is, without scanning new transcript lines")
+    ptk.set_defaults(fn=cmd_tokens, board_filter=None)
 
     # export (5.5c · #115) — write a shareable HTML/Markdown snapshot
     pex = sub.add_parser("export",
@@ -643,6 +660,10 @@ def main():
     # any one board — same board-less shape as board-new.
     if getattr(args, "cmd", None) in ("telegram-setup", "telegram-alias"):
         return args.fn(args)
+    # tokens (#958) reads every transcript, not one board; --board only narrows.
+    if getattr(args, "cmd", None) == "tokens":
+        args.board_filter = hoisted or (str(args.board) if args.board else None)
+        return args.fn(args)
     if hoisted and not args.board:
         args.board = Path(hoisted)
     board = find_board(args.board)
@@ -664,6 +685,7 @@ def main():
         # command prints success, so only the winning attempt has visible effect.
         MAX_WRITE_RETRIES = 12
         for attempt in range(MAX_WRITE_RETRIES):
+            card_commands._PENDING_CARD_EVENTS.clear()   # a retry re-queues its own
             d = load(board)
             try:
                 args.fn(args, d, board)
@@ -702,6 +724,8 @@ def main():
     # Count the classification verb AFTER the write committed (so failed ops
     # aren't counted). Best-effort — never raises. (#382)
     _log_verb_usage(args, board)
+    # #958 - card events for per-card token attribution, after the commit.
+    card_commands.flush_card_events(board)
     # Record this board as last-active (mutations only) so the SessionStart hook
     # reopens the board the human is actually working on. Best-effort. (#mb)
     _mark_active(args, board)
