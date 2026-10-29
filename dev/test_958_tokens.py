@@ -557,10 +557,19 @@ def test_ui_markup():
           "view toggle has a Tokens button and a #tokens container")
     check("renderTokens()" in html and "apiBase + '/tokens?since='" in html,
           "render() drives renderTokens, which reads the active board's /tokens")
-    check("data-seg=\"' + name + '\"" in html and "seg('units', [['cost', '$'], ['tokens', 'Tokens']]" in html,
-          "a $ / Tokens units toggle")
-    check("function _tkByProject" in html and "_tkToggleProject" in html and "data-act=\"all\"" in html,
-          "per-project chart with project toggles and a show-all reset")
+    check("_tkSeg('units', [['cost', '$'], ['tokens', 'Tokens']]" in html
+          and "_tkSeg('win', [[7, '7D'], [30, '30D'], [90, '90D']]" in html and 'data-act="compare"' in html,
+          "one filter row: 7D / 30D / 90D, Compare, Projects, $ / Tokens")
+    check("function _tkStack(" in html and "TK_TOP = 5" in html and "TK_MIN_SEG = 4" in html,
+          "stacked chart: top 5 + Other, segments under 4 px fold into Other")
+    check("function _tkPickerOpen" in html and "_tkOnly(" in html and "_tkClearFilter" in html
+          and "tk-psearch" in html,
+          "Projects picker with search, Only, Select all / Clear, and a filter-row Clear")
+    blk0 = html[html.index("function _tkTooltip("):html.index("function _tkShift(")]
+    check("textContent" in blk0 and "innerHTML" not in blk0,
+          "the bar tooltip is built with textContent (labels are folder names)")
+    check("_tkLogsStrip(" in html and "body.tk-logs-strip #tokens" in html,
+          "on the Tokens view the Logs dock gets its own strip, never over a card")
     blk = html[html.index("// ===== #958 Tokens view"):html.index("// ===== View switcher (Board / Calendar / Tokens)")]
     check("localStorage" in blk and blk.count("try {") >= 2,
           "units and hidden projects are remembered per browser, storage access guarded")
