@@ -135,7 +135,8 @@ class Filter:
         return (not self.project or key == self.project) and (key or "") not in self.exclude
 
 
-def compute(con, since_days: int = 7, project: str | None = None, exclude=None) -> dict:
+def compute(con, since_days: int = 7, project: str | None = None, exclude=None,
+            compare: bool = True) -> dict:
     start, end = _window(since_days)
     folders = _tokens.FolderKeys()
     titles = _tokens.BoardCards()
@@ -147,6 +148,13 @@ def compute(con, since_days: int = 7, project: str | None = None, exclude=None) 
     daily_all = [dict(r) for r in con.execute(
         f"SELECT * FROM daily WHERE day >= ? AND day <= ?{pf}", [start, end] + pa)]
     daily = [r for r in daily_all if flt.keeps(r["project"])]
+    data_start = con.execute("SELECT MIN(day) FROM daily").fetchone()[0]
+    reply_start = con.execute("SELECT MIN(day) FROM replies").fetchone()[0]
+    prev_from, prev_to = _shift(start, -since_days), _shift(end, -since_days)
+    prev_all = [dict(r) for r in con.execute(
+        f"SELECT * FROM daily WHERE day >= ? AND day <= ?{pf}", [prev_from, prev_to] + pa)] \
+        if compare else []
+    _unique_labels({r["project"] for r in daily_all} | {r["project"] for r in prev_all}, folders)
     tot = _totals(daily)
     out: dict = {
         "sinceDays": since_days, "from": start, "to": end,
@@ -154,6 +162,8 @@ def compute(con, since_days: int = 7, project: str | None = None, exclude=None) 
         "project": project, "projectLabel": project_label(project, folders) if project else None,
         "pricesAsOf": _tokens.PRICES_AS_OF, "basis": "API-equivalent list price, not a bill",
         "lastScan": _last_scan(con),
+        "dataStart": data_start, "replyStart": reply_start,
+        "coverage": {"days": _covered(start, end, data_start), "of": since_days},
         "exclude": flt.exclude,
         "totals": _shape_totals(tot),
     }
@@ -226,6 +236,15 @@ def compute(con, since_days: int = 7, project: str | None = None, exclude=None) 
     for p_ in out["byProject"]:
         p_["included"] = flt.keeps(p_["key"])
     out["byProjectDay"] = _project_days(daily_all, flt, [d["day"] for d in dd], folders)
+    for d in dd:
+        d["noData"] = not data_start or d["day"] < data_start
+    buckets = _buckets(start, end, since_days, data_start)
+    out["bucket"] = "day" if since_days <= 31 else "week"
+    out["buckets"] = buckets
+    out["byProjectBucket"] = _project_buckets(daily_all, flt, buckets, folders)
+    if compare:
+        out["previous"] = _previous(prev_all, flt, prev_from, prev_to, buckets, since_days,
+                                    data_start)
 
     def card_extra(k, rs, t):
         conf = conf_split(rs, "card_rule", CARD_CONFIDENCE)
@@ -246,6 +265,116 @@ def compute(con, since_days: int = 7, project: str | None = None, exclude=None) 
     out["compactions"] = _compactions(con, start, end, flt)
     out["insights"] = _insights(out)
     return out
+
+
+def _shift(day: str, n: int) -> str:
+    return (datetime.date.fromisoformat(day) + datetime.timedelta(days=n)).isoformat()
+
+
+def _covered(start: str, end: str, data_start: str | None) -> int:
+    """Days of [start, end] on or after the first day the index has data."""
+    if not data_start or data_start > end:
+        return 0
+    lo = max(start, data_start)
+    return (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(lo)).days + 1
+
+
+def _unique_labels(keys, folders) -> None:
+    """Two different projects must never read the same: when labels collide,
+    append the parent folder to each ("Api (services)", "Api (tools)")."""
+    by_label: dict = {}
+    for k in keys:
+        if k:
+            by_label.setdefault(project_label(k, folders), []).append(k)
+    for label, ks in by_label.items():
+        if len(ks) > 1:
+            for k in ks:
+                _LABELS[k] = f"{label} ({os.path.basename(os.path.dirname(k.rstrip('/'))) or '/'})"
+
+
+def _buckets(start: str, end: str, since_days: int, data_start: str | None) -> list:
+    """Chart buckets for the window, oldest first: one per day up to 31 days,
+    else rolling 7-day blocks ending today (the oldest block may be shorter).
+    partial = still filling (holds today), short, or only partly covered by data;
+    noData = no day of it is covered (before the first day the index has)."""
+    today = datetime.date.today().isoformat()
+    size = 1 if since_days <= 31 else 7
+    res = []
+    hi = end
+    while hi >= start:
+        lo = max(start, _shift(hi, -(size - 1)))
+        days = (datetime.date.fromisoformat(hi) - datetime.date.fromisoformat(lo)).days + 1
+        cov = _covered(lo, hi, data_start)
+        res.append({"start": lo, "end": hi, "days": days, "coveredDays": cov,
+                    "today": lo <= today <= hi, "noData": cov == 0,
+                    "partial": (lo <= today <= hi) or cov < days or days < size})
+        hi = _shift(lo, -1)
+    res.reverse()
+    return res
+
+
+def _bucket_index(buckets: list):
+    idx = {}
+    for i, b in enumerate(buckets):
+        d = b["start"]
+        while d <= b["end"]:
+            idx[d] = i
+            d = _shift(d, 1)
+    return idx
+
+
+def _cell(t) -> dict:
+    return {"cost": _r(t["cost"]), "tokensNew": t["out"] + t["inp"] + t["w5"] + t["w1"],
+            "cacheRead": t["cr"]}
+
+
+def _project_buckets(rows, flt, buckets, folders) -> dict:
+    """Every project of the window (ranked by cost, excluded ones flagged),
+    with its value in each bucket, so the client picks the top series of the
+    included set and folds the rest into Other without another request."""
+    idx = _bucket_index(buckets)
+    by_proj: dict = {}
+    for r in rows:
+        by_proj.setdefault(r["project"], []).append(r)
+    series = []
+    for k, rs in by_proj.items():
+        cells = [[] for _ in buckets]
+        for r in rs:
+            i = idx.get(r["day"])
+            if i is not None:
+                cells[i].append(r)
+        series.append({"key": k, "label": project_label(k, folders), "included": flt.keeps(k),
+                       "total": _cell(_totals(rs)), "values": [_cell(_totals(c)) for c in cells]})
+    series.sort(key=lambda x: -x["total"]["cost"])
+    return {"series": series}
+
+
+def _previous(rows, flt, prev_from, prev_to, buckets, since_days, data_start) -> dict:
+    """The same-length period just before the window, under the same filter.
+    complete only when the index has data for all of it; % change is shown
+    only then (comparing 30 days with 1 day of data would be a fake +2900%)."""
+    rows = [r for r in rows if flt.keeps(r["project"])]
+    by_proj: dict = {}
+    for r in rows:
+        by_proj.setdefault(r["project"] or "", []).append(r)
+    shifted = [{"start": _shift(b["start"], -since_days), "end": _shift(b["end"], -since_days)}
+               for b in buckets]
+    idx = _bucket_index(shifted)
+    cells = [[] for _ in shifted]
+    for r in rows:
+        i = idx.get(r["day"])
+        if i is not None:
+            cells[i].append(r)
+    t = _totals(rows)
+    return {
+        "from": prev_from, "to": prev_to,
+        "complete": bool(data_start) and prev_from >= data_start,
+        "availableFrom": _shift(data_start, 2 * since_days - 1) if data_start else None,
+        "totals": dict(_cell(t), replies=t["n"]),
+        "byProject": {k: _cell(_totals(v)) for k, v in by_proj.items()},
+        "byBucket": [dict(_cell(_totals(c)), complete=bool(data_start) and sb["start"] >= data_start)
+                     for c, sb in zip(cells, shifted)],
+    }
 
 
 def _token_split(t) -> dict:
@@ -569,6 +698,16 @@ def to_text(o: dict, by: str = "summary", units: str = "cost") -> str:
     L.append(f"  total      : {_money(t['cost'])} over {t['replies']:,} replies"
              + (f"  (incl. {_money(est['cost'])} on {est['replies']:,} replies with ESTIMATED "
                 f"output; recorded-only {_money(t['costRaw'])})" if est["replies"] else ""))
+    pv = o.get("previous")
+    if pv:
+        if pv["complete"]:
+            a, b = t["cost"], pv["totals"]["cost"]
+            ch = (f"{'▲' if a >= b else '▼'} {abs(a - b) / b:.0%}" if b else "new")
+            L.append(f"  vs before : {ch}  {'+' if a >= b else '-'}{_money(abs(a - b))} "
+                     f"vs {pv['from']} to {pv['to']} ({_money(b)})")
+        else:
+            L.append(f"  vs before : not comparable yet - data starts {o.get('dataStart')}, "
+                     f"compare from {pv['availableFrom']}")
     if o.get("exclude"):
         L.append("  excluded   : " + ", ".join(project_label(e or None) for e in o["exclude"]))
     if t["unpricedReplies"]:

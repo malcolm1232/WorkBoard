@@ -366,6 +366,9 @@ CREATE INDEX IF NOT EXISTS daily_day ON daily(day);
 # Bump when the stored shape changes: the next refresh rebuilds from the
 # transcripts (daily rows older than every retained reply are kept).
 INDEX_VERSION = "2"
+# Bump when attribution rules change: the next refresh re-attributes from the
+# stored rows without re-reading transcripts.
+ATTRIBUTION_VERSION = "2"   # 2: a folder holding exactly one board project is that project
 _VERSIONED_TABLES = ("card_calls",)   # tables whose columns changed since v1
 
 
@@ -899,8 +902,12 @@ class Index:
         root = projects_dir()
         roots = board_roots()
         roots_sig = json.dumps(roots)
-        all_dirty = roots_sig != (self._meta("roots") or "")
+        # Attribution rules changed (or the board set did): re-attribute every
+        # session tree from the stored rows; no transcript is re-read.
+        all_dirty = roots_sig != (self._meta("roots") or "") \
+            or self._meta("attr_version") != ATTRIBUTION_VERSION
         self._set_meta("roots", roots_sig)
+        self._set_meta("attr_version", ATTRIBUTION_VERSION)
         folders = FolderKeys()
         known = {r["path"]: r for r in self.con.execute("SELECT * FROM files")}
         seen = set()
@@ -1183,6 +1190,12 @@ class Index:
         board_votes, folder_votes = {}, {}
         for f in fl:
             for kind, key, n in touches.get(f["id"], ()):
+                if kind == "folder":
+                    # A folder that holds exactly one board project (its repo
+                    # plus sibling worktrees and side folders) is that project.
+                    inside = [r for r in roots if r.startswith(key.rstrip("/") + "/")]
+                    if len(inside) == 1:
+                        kind, key = "board", inside[0]
                 tgt = board_votes if kind == "board" else folder_votes
                 tgt[key] = tgt.get(key, 0) + n
         vote = None

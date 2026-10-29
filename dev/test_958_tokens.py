@@ -423,6 +423,85 @@ def test_project_toggles():
           "card.py tokens --by project-day --units tokens --exclude prints the per-day table")
 
 
+def test_ranges_and_compare():
+    print("ranges, buckets, previous period, dataStart, labels")
+    import datetime as dt
+    today = dt.date.today()
+
+    def ts(days_ago, hh=4):   # 04:00Z is noon at UTC+8: the local day is unambiguous
+        return (today - dt.timedelta(days=days_ago)).isoformat() + f"T{hh:02d}:00:00Z"
+    S10 = "00000010-0000-0000-0000-000000000000"
+    write(SLUG / f"{S10}.jsonl", [
+        user(ts(20), sid=S10, cwd=str(BOARDP)),
+        asst("rel20", ts(20), inp=1, out=100, cr=10_000, sid=S10, cwd=str(BOARDP)),
+        asst("rel10", ts(10), inp=1, out=200, cr=20_000, sid=S10, cwd=str(BOARDP)),
+        asst("rel3", ts(3), inp=1, out=300, cr=30_000, sid=S10, cwd=str(BOARDP)),
+    ])
+    _tokens.refresh()
+    con = _tokens.connect()
+    data_start = q("SELECT MIN(day) FROM daily")[0][0]
+    check(data_start <= (today - dt.timedelta(days=20)).isoformat(), "dataStart = first day with data")
+    o7 = _tokens_report.compute(con, since_days=7)
+    pv = o7["previous"]
+    check(o7["dataStart"] == data_start and o7["bucket"] == "day" and len(o7["buckets"]) == 7
+          and o7["buckets"][-1]["today"] and o7["buckets"][-1]["partial"],
+          "7D: 7 daily buckets, today flagged partial ('so far')")
+    check(pv["from"] == (today - dt.timedelta(days=13)).isoformat() and pv["complete"] is True,
+          "previous period = the 7 days before, complete when the index covers all of it")
+    r10 = q("SELECT cost FROM replies WHERE mid='rel10'")[0][0]
+    check(near(pv["totals"]["cost"], r10, 0.006) and len(pv["byBucket"]) == 7
+          and near(sum(b["cost"] for b in pv["byBucket"]), pv["totals"]["cost"], 0.01),
+          "previous totals and per-bucket values (aligned with the window's buckets)")
+    o90 = _tokens_report.compute(con, since_days=90)
+    b90 = o90["buckets"]
+    check(o90["bucket"] == "week" and len(b90) == 13 and b90[0]["days"] == 6 and b90[0]["partial"]
+          and all(b["days"] == 7 for b in b90[1:]) and b90[-1]["end"] == today.isoformat(),
+          "90D: 13 rolling 7-day blocks ending today, the oldest one 6 days and partial")
+    nod = [b for b in b90 if b["noData"]]
+    check(nod and all(b["end"] < data_start for b in nod) and all(b["coveredDays"] == 0 for b in nod),
+          "blocks before dataStart are noData, not zero spend")
+    straddle = [b for b in b90 if b["start"] < data_start <= b["end"]]
+    check(not straddle or (straddle[0]["partial"] and 0 < straddle[0]["coveredDays"] < 7),
+          "a block straddling dataStart is partial with its covered day count")
+    check(o90["previous"]["complete"] is False and o90["previous"]["availableFrom"]
+          == (dt.date.fromisoformat(data_start) + dt.timedelta(days=179)).isoformat(),
+          "90D before enough history: not comparable, availableFrom = dataStart + 2x90 - 1")
+    check(o90["coverage"] == {"days": (today - dt.date.fromisoformat(data_start)).days + 1, "of": 90},
+          "coverage counts only the days with data")
+    ser = o90["byProjectBucket"]["series"]
+    check(all(len(x["values"]) == 13 for x in ser)
+          and near(sum(v["cost"] for x in ser for v in x["values"]), o90["totals"]["cost"], 0.05),
+          "byProjectBucket: every project, one value per bucket, adding up to the total")
+    check(all(d.get("noData") == (d["day"] < data_start) for d in o90["byDay"]),
+          "byDay marks the days before dataStart instead of reporting them as $0")
+    off = _tokens_report.compute(con, since_days=7, exclude=[str(BOARDP)])
+    check(off["previous"]["totals"]["cost"] == 0, "the previous period honours the project filter")
+    con.close()
+    # Same name, different projects: both get their parent folder.
+    _tokens_report._LABELS.clear()
+    _tokens_report._LABELS.update({"/x/a/Same": "Same", "/x/b/Same": "Same"})
+    _tokens_report._unique_labels({"/x/a/Same", "/x/b/Same"}, None)
+    check(_tokens_report._LABELS["/x/a/Same"] == "Same (a)" and _tokens_report._LABELS["/x/b/Same"] == "Same (b)",
+          "two projects with one name read 'Same (a)' and 'Same (b)'")
+    # A folder holding exactly one board project (sibling worktrees) is that project.
+    delta = FOLDER_BASE / "Delta"
+    (delta / "app" / "board").mkdir(parents=True)
+    (delta / "app" / "board" / "board.json").write_text(json.dumps({"title": "Delta", "cards": []}))
+    a = json.loads((TMP / "assign.json").read_text())
+    a[str(delta / "app" / "board")] = 7997
+    (TMP / "assign.json").write_text(json.dumps(a))
+    S11 = "00000011-0000-0000-0000-000000000000"
+    write(SLUG / f"{S11}.jsonl", [
+        user(ts(1), sid=S11),
+        asst("dlt", ts(1), inp=1, out=1, cr=1000, sid=S11,
+             tools=[("Edit", f"d{i}", {"file_path": f"{delta}/app-wt/f{i}.py"}) for i in range(3)]),
+    ])
+    _tokens.refresh()
+    r = q("SELECT project, project_rule FROM replies WHERE mid='dlt'")[0]
+    check(r[0] == str(delta / "app") and r[1] == "paths-board",
+          "work in a sibling folder of the only board under a folder counts for that board (inferred)")
+
+
 def test_endpoint():
     print("GET /tokens")
     os.environ["BOARD_TOKENS_DISABLE"] = "1"   # no background scan thread here
@@ -452,6 +531,10 @@ def test_endpoint():
     check(st == 200 and ex["exclude"] == ["", str(BOARDP)]
           and ex["totals"]["cost"] < all_["totals"]["cost"],
           "?exclude= (repeatable, '(none)' = unattributed) switches projects off")
+    st, nc = get("/tokens?since=90d&compare=0")
+    check(st == 200 and "previous" not in nc and nc["bucket"] == "week" and len(nc["buckets"]) == 13
+          and "previous" in get("/tokens?since=7d")[1],
+          "?since=90d answers weekly buckets; ?compare=0 drops the previous-period block")
     st, bad = get("/tokens?since=abc")
     check(st == 200 and bad["sinceDays"] == 7, "a bad ?since falls back to 7 days")
 
@@ -494,6 +577,7 @@ def main():
     test_card_events()
     test_card_board_resolution()
     test_project_toggles()
+    test_ranges_and_compare()
     test_endpoint()
     test_cli_empty_index()
     test_ui_markup()

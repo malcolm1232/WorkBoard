@@ -721,7 +721,10 @@ class BoardHandler(BaseHTTPRequestHandler):
         `card.py tokens --json`). ?since=Nd window (default 7); ?scope=board
         narrows to this board's project, ?project=<root path> to any project;
         each ?exclude=<root path> (or "(none)" for unattributed) switches a
-        project off for every number in the report except the Projects list. The index is refreshed by the
+        project off for every number in the report except the Projects list.
+        Windows up to 31 days chart by day, longer ones by rolling week; with
+        ?compare=1 (default) a `previous` block holds the same-length period
+        before, flagged complete only when the index covers all of it. The index is refreshed by the
         background scanner, never inside the request; before its first scan
         completes this answers {"indexing": true}."""
         qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -731,6 +734,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         if (qs.get("scope") or [""])[0] == "board":
             project = str(Path(self.board_dir).resolve().parent)
         exclude = ["" if e == "(none)" else e for e in qs.get("exclude", [])]
+        compare = (qs.get("compare") or ["1"])[0] != "0"   # previous-period block (default on)
         _kick_token_scan()
         try:
             con = _tokens.connect()
@@ -739,7 +743,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                     self._send(200, json.dumps({"indexing": True}).encode())
                     return
                 out = _tokens_report.compute(con, since_days=since_days, project=project,
-                                             exclude=exclude)
+                                             exclude=exclude, compare=compare)
             finally:
                 con.close()
         except Exception as e:
