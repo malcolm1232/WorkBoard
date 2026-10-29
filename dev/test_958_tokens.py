@@ -313,7 +313,7 @@ def test_card_events():
     check(c7["title"] == "Old card" and c7["confidence"]["exact"] > 0, "card row has title + confidence")
     txt = _tokens_report.to_text(o)
     check("ESTIMATED" in txt and "unpriced" in txt, "text report labels estimates and unpriced models")
-    check("—" not in txt, "no em dash in the report text")
+    check("\u2014" not in txt, "no em dash in the report text")
 
 
 def test_endpoint():
@@ -344,12 +344,24 @@ def test_endpoint():
     check(st == 200 and bad["sinceDays"] == 7, "a bad ?since falls back to 7 days")
 
 
+def test_ui_markup():
+    print("board.html Tokens view")
+    html = (REPO / "templates" / "board.html").read_text()
+    check('data-view="tokens"' in html and '<div id="tokens"></div>' in html,
+          "view toggle has a Tokens button and a #tokens container")
+    check("renderTokens()" in html and "apiBase + '/tokens?since='" in html,
+          "render() drives renderTokens, which reads the active board's /tokens")
+    check(html.count("calc(100% - var(--hdr-h, 48px))") == 3,
+          "board, calendar and tokens views size from the live header height")
+
+
 def main():
     test_pricing()
     before = test_index()
     test_incremental(before)
     test_card_events()
     test_endpoint()
+    test_ui_markup()
     print("\nFAIL" if _fails else "\nPASS", f"({_fails} failing)")
     sys.exit(1 if _fails else 0)
 

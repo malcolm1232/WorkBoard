@@ -68,9 +68,19 @@ class Rig:
         for k in ("BOARD_NO_AUTO_OPEN", "BOARD_OPEN_EXPLICIT", "CLAUDE_CODE_SESSION_ID"):
             e.pop(k, None)
         e.update(env)
-        subprocess.run(["bash", str(SCRIPT), str(self.port), "", "sid-test"],
-                       env=e, check=True, timeout=20)
-        time.sleep(0.3)                          # the `open` is backgrounded
+        # The script backgrounds its `open`, so a fixed sleep raced it (flaky
+        # under load). Run it as its own process group and wait until the whole
+        # group, the backgrounded `open` included, has exited.
+        p = subprocess.Popen(["bash", str(SCRIPT), str(self.port), "", "sid-test"],
+                             env=e, start_new_session=True)
+        assert p.wait(timeout=20) == 0
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                os.killpg(p.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
 
     def opens(self) -> int:
         return len(self.open_log.read_text().splitlines()) if self.open_log.exists() else 0
